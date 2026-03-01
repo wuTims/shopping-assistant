@@ -1,0 +1,18 @@
+{
+  "name": "shopping-assistant",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:ext": "pnpm --filter @shopping-assistant/extension dev",
+    "dev:backend": "pnpm --filter @shopping-assistant/backend dev",
+    "build:shared": "pnpm --filter @shopping-assistant/shared build",
+    "build:ext": "pnpm --filter @shopping-assistant/extension build",
+    "build:backend": "pnpm --filter @shopping-assistant/backend build",
+    "build": "pnpm build:shared && pnpm build:ext && pnpm build:backend",
+    "typecheck": "pnpm -r typecheck",
+    "clean": "pnpm -r clean"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
