@@ -1,0 +1,51 @@
+graph TB
+    subgraph Extension["Chrome Extension (Manifest V3)"]
+        CS["Content Script<br/><i>DOM heuristics</i><br/><i>Product detection</i><br/><i>Overlay icon injection</i>"]
+        SW["Service Worker<br/><i>Message routing</i><br/><i>Cache management</i>"]
+        SP["Side Panel<br/><i>Results display</i><br/><i>Chat (text + voice)</i>"]
+        Cache["chrome.storage.local<br/><i>Cached searches</i><br/><i>TTL: 1 hour, max 50</i>"]
+    end
+
+    subgraph CloudRun["Cloud Run Backend (TypeScript / Hono)"]
+        REST["REST API<br/><i>POST /search</i><br/><i>POST /chat</i>"]
+
+        subgraph Pipeline["Search Pipeline"]
+            direction TB
+            ID["① Identify<br/><i>Gemini Flash</i><br/><i>Image → description</i><br/><i>+ search queries</i>"]
+
+            subgraph Parallel["② Search (parallel)"]
+                GG["Gemini Grounding<br/><i>Google Search tool</i><br/><i>Broad marketplace</i><br/><i>discovery</i>"]
+                BR["Brave LLM Context<br/><i>Structured data</i><br/><i>JSON-LD extraction</i>"]
+            end
+
+            MERGE["Merge + Dedup<br/><i>Normalize → SearchResult</i><br/><i>Deduplicate by URL</i>"]
+            RANK["③ Rank<br/><i>Gemini Flash</i><br/><i>Visual comparison</i><br/><i>Confidence + price delta</i>"]
+        end
+
+        WS["WebSocket /live<br/><i>Gemini Live API proxy</i><br/><i>Audio streaming</i>"]
+    end
+
+    CS -->|"click event + DetectedProduct"| SW
+    SW -->|"cache check"| Cache
+    SW -->|"SearchRequest"| REST
+    REST --> ID
+    ID --> GG
+    ID --> BR
+    GG --> MERGE
+    BR --> MERGE
+    MERGE --> RANK
+    RANK -->|"SearchResponse"| SW
+    SW -->|"RankedResult[]"| SP
+    SP -->|"POST /chat"| REST
+    REST -->|"chat reply"| SP
+    SP <-->|"WSS audio + text"| WS
+
+    classDef extension fill:#f0f9ff,stroke:#3b82f6,color:#1e293b
+    classDef backend fill:#fefce8,stroke:#eab308,color:#1e293b
+    classDef pipeline fill:#f0fdf4,stroke:#22c55e,color:#1e293b
+    classDef search fill:#faf5ff,stroke:#a855f7,color:#1e293b
+
+    class CS,SW,SP,Cache extension
+    class REST,WS backend
+    class ID,RANK pipeline
+    class GG,BR search
