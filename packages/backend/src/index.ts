@@ -8,19 +8,31 @@ import { searchRoute } from "./routes/search.js";
 import { chatRoute } from "./routes/chat.js";
 import { liveWebSocket } from "./ws/live.js";
 
+// Fail fast if required env vars are missing
+const REQUIRED_ENV_VARS = ["GEMINI_API_KEY", "BRAVE_API_KEY"];
+for (const key of REQUIRED_ENV_VARS) {
+  if (!process.env[key]) {
+    console.error(`Missing required environment variable: ${key}`);
+    process.exit(1);
+  }
+}
+
 const app = new Hono();
 const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app });
 
 // Middleware
 app.use("*", logger());
-app.use(
-  "*",
-  cors({
-    origin: "*", // TODO: Restrict to extension origin in production
-    allowMethods: ["GET", "POST"],
-    allowHeaders: ["Content-Type"],
-  }),
-);
+
+// Apply CORS only to REST endpoints.
+// WebSocket upgrade requests are incompatible with CORS header mutation.
+const corsMiddleware = cors({
+  origin: "*", // TODO: Restrict to extension origin in production
+  allowMethods: ["GET", "POST"],
+  allowHeaders: ["Content-Type"],
+});
+app.use("/health", corsMiddleware);
+app.use("/search/*", corsMiddleware);
+app.use("/chat/*", corsMiddleware);
 
 // Health check
 app.get("/health", (c) => c.json({ status: "ok" }));

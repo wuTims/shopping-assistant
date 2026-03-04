@@ -25,7 +25,7 @@ The project scaffolding is complete (all three packages build, types defined, bu
 
 Install `@google/genai` SDK. Three functions:
 
-1. **`identifyProduct(imageUrl, title)`** — Sends product image to Gemini Flash. Returns `ProductIdentification` with category, description, brand, attributes, and 2-3 search queries. Uses structured JSON output via response schema.
+1. **`identifyProduct(imageUrl, title)`** — Sends product image to Gemini Flash. Returns `ProductIdentification` with category, description, brand, attributes, and 2-3 search queries. Uses structured JSON output via `responseJsonSchema` config.
 
 2. **`groundedSearch(queries)`** — Calls Gemini Flash with `google_search` tool enabled, targeting marketplace queries. Returns raw grounding chunks (URLs + titles + synthesized text). Prompt requests structured JSON for each product found.
 
@@ -38,6 +38,11 @@ Environment variable: `GEMINI_API_KEY`
 Plain `fetch` calls to Brave Web Search API. Sends 2-3 search queries derived from ProductIdentification. Parses web results — extracts product data from `extra_snippets` and structured fields (JSON-LD Product schema when available).
 
 Environment variable: `BRAVE_API_KEY`
+
+### Shared Utilities (`packages/backend/src/utils/marketplace.ts`)
+
+- `extractMarketplace(url)` — parse hostname to marketplace name (Amazon, eBay, etc.)
+- Used by both Gemini grounding and Brave search normalization (DRY)
 
 ### Ranking Service (`packages/backend/src/services/ranking.ts`)
 
@@ -86,6 +91,7 @@ Returns `SearchResponse` with metadata (counts, durations, source statuses).
 - 28x28px icon at top-right of detected product images
 - Click → `chrome.runtime.sendMessage` with `DetectedProduct`
 - Max 20 overlays per page
+- Green dot indicator on overlay when cached results exist for that product
 - MutationObserver for SPA navigation (re-detect on URL change)
 
 ---

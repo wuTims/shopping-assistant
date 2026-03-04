@@ -14,3 +14,9 @@ export const CONFIDENCE_THRESHOLDS = {
   high: 0.7,
   medium: 0.4,
 } as const;
+
+export const MIN_CONFIDENCE_SCORE = 0.15;
+
+export const MAX_RESULTS_FOR_RANKING = 15;
+export const MAX_IMAGES_FOR_RANKING = 5;
+export const RANKING_IMAGE_TIMEOUT_MS = 3_000;
