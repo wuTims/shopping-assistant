@@ -20,10 +20,15 @@ export class RankingOutputValidationError extends Error {
 
 // ── identifyProduct ──────────────────────────────────────────────────────────
 
+export interface IdentifyProductResult {
+  identification: ProductIdentification;
+  originalImage: FetchedImage;
+}
+
 export async function identifyProduct(
   imageUrl: string,
   title: string | null,
-): Promise<ProductIdentification> {
+): Promise<IdentifyProductResult> {
   const prompt = [
     "You are a product identification expert.",
     "Analyze the product image and any provided title.",
@@ -79,7 +84,8 @@ export async function identifyProduct(
     },
   });
 
-  return JSON.parse(response.text!) as ProductIdentification;
+  const identification = JSON.parse(response.text!) as ProductIdentification;
+  return { identification, originalImage: productImage };
 }
 
 // ── groundedSearch ───────────────────────────────────────────────────────────
@@ -158,15 +164,17 @@ export async function groundedSearch(queries: string[]): Promise<ProviderSearchO
 
 // ── rankResults ──────────────────────────────────────────────────────────────
 
-export async function rankResults(
-  originalImageUrl: string,
-  results: SearchResult[],
-  identification: ProductIdentification,
-): Promise<Record<string, number>> {
+export interface RankResultsInput {
+  originalImage: FetchedImage;
+  results: SearchResult[];
+  resultImages: Map<string, FetchedImage>;
+  identification: ProductIdentification;
+}
+
+export async function rankResults(input: RankResultsInput): Promise<Record<string, number>> {
+  const { originalImage, results, resultImages, identification } = input;
   if (results.length === 0) return {};
   const resultIds = results.map((r) => r.id);
-
-  const originalImage = await fetchImage(originalImageUrl);
 
   // Build content parts: original image + text descriptions of results (with images when available)
   const contentParts: Array<
@@ -177,39 +185,19 @@ export async function rankResults(
     inlineData: originalImage,
   });
 
-  const resultDescriptions: string[] = [];
-  const resultImageParts: Array<{
-    index: number;
-    data: string;
-    mimeType: string;
-  }> = [];
-
-  // Fetch result images in parallel (best effort)
-  const imagePromises = results.map(async (r, i) => {
-    if (!r.imageUrl) return null;
-    try {
-      const img = await fetchImage(r.imageUrl);
-      return { index: i, ...img };
-    } catch {
-      return null;
-    }
-  });
-  const fetchedImages = (await Promise.all(imagePromises)).filter(
-    (x): x is { index: number; data: string; mimeType: string } => x !== null,
-  );
-
   // Add result images inline
-  for (const img of fetchedImages) {
+  const resultIdsWithImages = new Set<string>();
+  for (const [id, img] of resultImages) {
     contentParts.push({
       inlineData: { mimeType: img.mimeType, data: img.data },
     });
-    resultImageParts.push(img);
+    resultIdsWithImages.add(id);
   }
 
   // Build descriptions
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
-    const hasImage = resultImageParts.some((p) => p.index === i);
+  const resultDescriptions: string[] = [];
+  for (const r of results) {
+    const hasImage = resultIdsWithImages.has(r.id);
     const imageNote = hasImage
       ? "(image provided above for visual comparison)"
       : "(no image available — rank based on text similarity only)";
@@ -255,7 +243,7 @@ export async function rankResults(
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-interface FetchedImage {
+export interface FetchedImage {
   data: string;
   mimeType: string;
 }
@@ -309,7 +297,7 @@ async function assertResolvedAddressPublic(urlStr: string): Promise<void> {
   assertIsPrivateIp(address);
 }
 
-async function fetchImage(url: string): Promise<FetchedImage> {
+export async function fetchImage(url: string, timeoutMs = IMAGE_FETCH_TIMEOUT_MS): Promise<FetchedImage> {
   assertNotPrivateHost(url);
   await assertResolvedAddressPublic(url);
 
@@ -319,7 +307,7 @@ async function fetchImage(url: string): Promise<FetchedImage> {
 
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     res = await fetch(currentUrl, {
-      signal: AbortSignal.timeout(IMAGE_FETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
       redirect: "manual",
     });
 

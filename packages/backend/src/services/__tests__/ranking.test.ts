@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { SearchResult, ProductIdentification } from "@shopping-assistant/shared";
-import { mergeAndDedup, applyRanking, buildFallbackScores } from "../ranking.js";
+import { mergeAndDedup, applyRanking, buildFallbackScores, heuristicPreSort, selectImageCandidates } from "../ranking.js";
 
 function makeResult(overrides: Partial<SearchResult> = {}): SearchResult {
   return {
@@ -185,5 +185,91 @@ describe("buildFallbackScores", () => {
     ];
     const scores = buildFallbackScores(results, baseIdentification);
     expect(scores.a).toBeGreaterThan(scores.b);
+  });
+});
+
+describe("heuristicPreSort", () => {
+  it("returns empty array for empty input", () => {
+    expect(heuristicPreSort([], baseIdentification, null)).toEqual([]);
+  });
+
+  it("ranks brand-matching results higher", () => {
+    const results = [
+      makeResult({ id: "a", title: "Generic Bluetooth Headphones" }),
+      makeResult({ id: "b", title: "Sony WH-1000XM5 Wireless Headphones" }),
+    ];
+    const sorted = heuristicPreSort(results, baseIdentification, null);
+    expect(sorted[0].id).toBe("b");
+  });
+
+  it("prefers results with price and image", () => {
+    const results = [
+      makeResult({ id: "a", title: "Wireless Headphones", price: null, imageUrl: null }),
+      makeResult({ id: "b", title: "Wireless Headphones", price: 199, imageUrl: "https://img.com/x.jpg" }),
+    ];
+    const sorted = heuristicPreSort(results, baseIdentification, null);
+    expect(sorted[0].id).toBe("b");
+  });
+
+  it("boosts results with price close to original", () => {
+    const results = [
+      makeResult({ id: "a", title: "Sony Wireless Headphones", price: 999 }),
+      makeResult({ id: "b", title: "Sony Wireless Headphones", price: 280 }),
+    ];
+    const sorted = heuristicPreSort(results, baseIdentification, 298);
+    expect(sorted[0].id).toBe("b");
+  });
+
+  it("boosts known marketplaces", () => {
+    const results = [
+      makeResult({ id: "a", title: "Sony Headphones", marketplace: "Unknown Shop" }),
+      makeResult({ id: "b", title: "Sony Headphones", marketplace: "Amazon" }),
+    ];
+    const sorted = heuristicPreSort(results, baseIdentification, null);
+    expect(sorted[0].id).toBe("b");
+  });
+});
+
+describe("selectImageCandidates", () => {
+  it("returns empty for results without images", () => {
+    const results = [
+      makeResult({ id: "a", imageUrl: null }),
+      makeResult({ id: "b", imageUrl: null }),
+    ];
+    expect(selectImageCandidates(results)).toEqual([]);
+  });
+
+  it("selects only results with imageUrl", () => {
+    const results = [
+      makeResult({ id: "a", imageUrl: null }),
+      makeResult({ id: "b", imageUrl: "https://img.com/b.jpg" }),
+      makeResult({ id: "c", imageUrl: "https://img.com/c.jpg" }),
+    ];
+    const candidates = selectImageCandidates(results);
+    expect(candidates).toHaveLength(2);
+    expect(candidates[0].id).toBe("b");
+    expect(candidates[1].id).toBe("c");
+  });
+
+  it("respects maxImages limit", () => {
+    const results = [
+      makeResult({ id: "a", imageUrl: "https://img.com/a.jpg" }),
+      makeResult({ id: "b", imageUrl: "https://img.com/b.jpg" }),
+      makeResult({ id: "c", imageUrl: "https://img.com/c.jpg" }),
+    ];
+    const candidates = selectImageCandidates(results, 2);
+    expect(candidates).toHaveLength(2);
+    expect(candidates[0].id).toBe("a");
+    expect(candidates[1].id).toBe("b");
+  });
+
+  it("preserves sorted order from input", () => {
+    const results = [
+      makeResult({ id: "c", imageUrl: "https://img.com/c.jpg" }),
+      makeResult({ id: "a", imageUrl: "https://img.com/a.jpg" }),
+      makeResult({ id: "b", imageUrl: null }),
+    ];
+    const candidates = selectImageCandidates(results, 5);
+    expect(candidates.map((c) => c.id)).toEqual(["c", "a"]);
   });
 });

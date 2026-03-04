@@ -132,6 +132,74 @@ export function buildFallbackScores(
   return scores;
 }
 
+// ── heuristicPreSort ────────────────────────────────────────────────────────
+
+const KNOWN_MARKETPLACES = new Set([
+  "Amazon", "eBay", "Walmart", "Target", "Best Buy", "Newegg",
+  "B&H Photo", "Costco", "AliExpress", "Etsy",
+]);
+
+export function heuristicPreSort(
+  results: SearchResult[],
+  identification: ProductIdentification,
+  originalPrice: number | null,
+): SearchResult[] {
+  const brand = identification.brand?.toLowerCase().trim() ?? null;
+  const categoryTokens = tokenize(identification.category);
+  const descriptionTokens = tokenize(identification.description);
+  const referenceTokens = new Set([...categoryTokens, ...descriptionTokens]);
+
+  const scored = results.map((r) => {
+    const titleTokens = tokenize(r.title);
+    const resultTokens = new Set(titleTokens);
+
+    // Title overlap
+    let overlap = 0;
+    for (const token of referenceTokens) {
+      if (resultTokens.has(token)) overlap++;
+    }
+    const overlapScore = referenceTokens.size > 0 ? overlap / referenceTokens.size : 0;
+
+    // Brand match
+    const brandScore = brand && r.title.toLowerCase().includes(brand) ? 0.25 : 0;
+
+    // Has price & image
+    const hasPrice = r.price !== null ? 0.1 : 0;
+    const hasImage = r.imageUrl ? 0.1 : 0;
+
+    // Price proximity (closer to original price is better)
+    let priceProximity = 0;
+    if (originalPrice !== null && r.price !== null && originalPrice > 0) {
+      const ratio = r.price / originalPrice;
+      // Prefer results within 50% of original price
+      if (ratio >= 0.3 && ratio <= 2.0) {
+        priceProximity = 0.15 * (1 - Math.abs(1 - ratio));
+      }
+    }
+
+    // Known marketplace boost
+    const marketplaceScore = KNOWN_MARKETPLACES.has(r.marketplace) ? 0.05 : 0;
+
+    const total = overlapScore * 0.4 + brandScore + hasPrice + hasImage + priceProximity + marketplaceScore;
+    return { result: r, score: total };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.map((s) => s.result);
+}
+
+// ── selectImageCandidates ───────────────────────────────────────────────────
+
+export function selectImageCandidates(sortedResults: SearchResult[], maxImages = 5): SearchResult[] {
+  const candidates: SearchResult[] = [];
+  for (const r of sortedResults) {
+    if (r.imageUrl && candidates.length < maxImages) {
+      candidates.push(r);
+    }
+  }
+  return candidates;
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function normalizeUrl(url: string): string {
