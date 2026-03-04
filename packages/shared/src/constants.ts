@@ -14,3 +14,5 @@ export const CONFIDENCE_THRESHOLDS = {
   high: 0.7,
   medium: 0.4,
 } as const;
+
+export const MIN_CONFIDENCE_SCORE = 0.15;

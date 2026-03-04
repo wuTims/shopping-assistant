@@ -1,5 +1,17 @@
 // === Detection ===
 
+/** Plain serializable rect — do NOT use DOMRect (not structured-clone safe across extension contexts). */
+export interface SerializableRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
 export interface DetectedProduct {
   id: string;
   imageUrl: string;
@@ -9,7 +21,7 @@ export interface DetectedProduct {
   pageUrl: string;
   marketplace: string | null;
   schemaData: Record<string, unknown> | null;
-  boundingRect: DOMRect;
+  boundingRect: SerializableRect;
   detectedAt: number;
 }
 
@@ -90,8 +102,24 @@ export interface SearchResponse {
       brave: "ok" | "timeout" | "error";
       grounding: "ok" | "timeout" | "error";
     };
+    sourceDiagnostics: {
+      brave: {
+        totalQueries: number;
+        successfulQueries: number;
+        failedQueries: number;
+        timedOutQueries: number;
+      };
+      grounding: {
+        totalQueries: number;
+        successfulQueries: number;
+        failedQueries: number;
+        timedOutQueries: number;
+      };
+    };
     searchDurationMs: number;
     rankingDurationMs: number;
+    rankingStatus: "ok" | "fallback";
+    rankingFailureReason: string | null;
   };
 }
 
