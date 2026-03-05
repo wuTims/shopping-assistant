@@ -22,12 +22,16 @@ function toSerializableRect(el: Element): SerializableRect {
   };
 }
 
-/** Find an img element by URL without CSS selector injection. */
+/** Find an img element by URL without CSS selector injection. Exact match first, filename fallback second. */
 export function findImageByUrl(url: string): Element | null {
-  const filename = url.split("/").pop() ?? "";
-  for (const img of document.querySelectorAll("img")) {
+  const imgs = document.querySelectorAll("img");
+  for (const img of imgs) {
     if (img.getAttribute("src") === url || img.src === url) return img;
-    if (filename && img.src.includes(filename)) return img;
+  }
+  const filename = url.split("/").pop() ?? "";
+  if (!filename) return null;
+  for (const img of imgs) {
+    if (img.src.includes(filename)) return img;
   }
   return null;
 }
