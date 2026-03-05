@@ -22,6 +22,16 @@ function toSerializableRect(el: Element): SerializableRect {
   };
 }
 
+/** Find an img element by URL without CSS selector injection. */
+export function findImageByUrl(url: string): Element | null {
+  const filename = url.split("/").pop() ?? "";
+  for (const img of document.querySelectorAll("img")) {
+    if (img.getAttribute("src") === url || img.src === url) return img;
+    if (filename && img.src.includes(filename)) return img;
+  }
+  return null;
+}
+
 function parsePrice(text: string): { price: number; currency: string } | null {
   const match = text.match(/([£$€¥₹])\s*([\d,]+(?:\.\d{1,2})?)/);
   if (match) {
@@ -72,7 +82,7 @@ function detectJsonLd(): RawDetection[] {
         if (item["@type"] !== "Product") continue;
         const imageUrl = Array.isArray(item.image) ? item.image[0] : item.image;
         if (!imageUrl || typeof imageUrl !== "string") continue;
-        const imgEl = document.querySelector(`img[src="${imageUrl}"], img[src*="${imageUrl.split("/").pop()}"]`);
+        const imgEl = findImageByUrl(imageUrl);
         if (!imgEl) continue;
         const rect = imgEl.getBoundingClientRect();
         if (rect.width < MIN_IMAGE_SIZE_PX || rect.height < MIN_IMAGE_SIZE_PX) continue;
@@ -106,7 +116,7 @@ function detectOpenGraph(): RawDetection[] {
   const currency = document.querySelector('meta[property="product:price:currency"], meta[property="og:price:currency"]')?.getAttribute("content") ?? null;
 
   if (!imageUrl) return [];
-  const imgEl = document.querySelector(`img[src="${imageUrl}"], img[src*="${imageUrl.split("/").pop()}"]`);
+  const imgEl = findImageByUrl(imageUrl);
   if (!imgEl) return [];
   const rect = imgEl.getBoundingClientRect();
   if (rect.width < MIN_IMAGE_SIZE_PX || rect.height < MIN_IMAGE_SIZE_PX) return [];
@@ -115,6 +125,20 @@ function detectOpenGraph(): RawDetection[] {
     imageUrl, imageEl: imgEl, title,
     price: priceStr ? parseFloat(priceStr) : null, currency,
   }];
+}
+
+function inferAmazonCurrency(): string {
+  const tldMap: Record<string, string> = {
+    "amazon.com": "USD", "amazon.ca": "CAD", "amazon.co.uk": "GBP",
+    "amazon.de": "EUR", "amazon.fr": "EUR", "amazon.it": "EUR",
+    "amazon.es": "EUR", "amazon.co.jp": "JPY", "amazon.in": "INR",
+    "amazon.com.au": "AUD", "amazon.com.br": "BRL", "amazon.com.mx": "MXN",
+  };
+  const host = location.hostname.replace("www.", "");
+  for (const [domain, cur] of Object.entries(tldMap)) {
+    if (host === domain) return cur;
+  }
+  return "USD";
 }
 
 function detectAmazon(): RawDetection[] {
@@ -127,11 +151,23 @@ function detectAmazon(): RawDetection[] {
   if (rect.width < MIN_IMAGE_SIZE_PX || rect.height < MIN_IMAGE_SIZE_PX) return [];
 
   const title = document.querySelector("#productTitle")?.textContent?.trim() ?? null;
-  const priceWhole = document.querySelector(".a-price .a-price-whole")?.textContent?.replace(/[^0-9]/g, "") ?? "";
-  const priceFrac = document.querySelector(".a-price .a-price-fraction")?.textContent?.replace(/[^0-9]/g, "") ?? "00";
-  const price = priceWhole ? parseFloat(`${priceWhole}.${priceFrac}`) : null;
 
-  return [{ imageUrl, imageEl: imgEl, title, price, currency: "USD" }];
+  // Try to parse price + currency from the displayed price text (includes symbol)
+  const priceText = document.querySelector(".a-price .a-offscreen")?.textContent
+    ?? document.querySelector("#priceblock_ourprice, #priceblock_dealprice")?.textContent
+    ?? "";
+  let parsed = parsePrice(priceText);
+
+  // Fallback: structured price elements (no currency symbol available)
+  if (!parsed) {
+    const priceWhole = document.querySelector(".a-price .a-price-whole")?.textContent?.replace(/[^0-9]/g, "") ?? "";
+    const priceFrac = document.querySelector(".a-price .a-price-fraction")?.textContent?.replace(/[^0-9]/g, "") ?? "00";
+    if (priceWhole) {
+      parsed = { price: parseFloat(`${priceWhole}.${priceFrac}`), currency: inferAmazonCurrency() };
+    }
+  }
+
+  return [{ imageUrl, imageEl: imgEl, title, price: parsed?.price ?? null, currency: parsed?.currency ?? inferAmazonCurrency() }];
 }
 
 function detectEbay(): RawDetection[] {

@@ -129,6 +129,7 @@ export interface CachedSearch {
   productId: string;
   response: SearchResponse;
   cachedAt: number;
+  lastAccessedAt: number;
   ttl: number;
 }
 

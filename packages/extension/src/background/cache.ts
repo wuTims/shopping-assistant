@@ -16,14 +16,18 @@ export async function getCached(productId: string): Promise<SearchResponse | nul
     return null;
   }
 
+  // Update last-access time for true LRU eviction
+  await chrome.storage.local.set({ [key]: { ...entry, lastAccessedAt: Date.now() } });
   return entry.response;
 }
 
 export async function setCached(productId: string, response: SearchResponse): Promise<void> {
+  const now = Date.now();
   const entry: CachedSearch = {
     productId,
     response,
-    cachedAt: Date.now(),
+    cachedAt: now,
+    lastAccessedAt: now,
     ttl: CACHE_TTL_MS,
   };
 
@@ -37,13 +41,13 @@ async function evictIfNeeded(): Promise<void> {
 
   for (const [key, value] of Object.entries(all)) {
     if (key.startsWith("search_") && value?.cachedAt) {
-      entries.push({ key, cachedAt: value.cachedAt });
+      entries.push({ key, cachedAt: value.lastAccessedAt ?? value.cachedAt });
     }
   }
 
   if (entries.length <= CACHE_MAX_ENTRIES) return;
 
-  // LRU: remove oldest entries
+  // LRU: evict least-recently-accessed entries first
   entries.sort((a, b) => a.cachedAt - b.cachedAt);
   const toRemove = entries.slice(0, entries.length - CACHE_MAX_ENTRIES).map((e) => e.key);
   await chrome.storage.local.remove(toRemove);

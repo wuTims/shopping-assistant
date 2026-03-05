@@ -1,5 +1,6 @@
 import type { DetectedProduct } from "@shopping-assistant/shared";
 import { OVERLAY_ICON_SIZE_PX, CACHE_TTL_MS } from "@shopping-assistant/shared";
+import { findImageByUrl } from "./detection";
 
 const OVERLAY_ATTR = "data-shopping-assistant-overlay";
 const Z_INDEX = 999999;
@@ -23,7 +24,7 @@ function createOverlayIcon(product: DetectedProduct): HTMLDivElement {
     justifyContent: "center",
     transition: "transform 0.15s ease, box-shadow 0.15s ease",
     pointerEvents: "auto",
-  } as CSSStyleDeclaration);
+  });
 
   // Inner icon (magnifier)
   const icon = document.createElement("span");
@@ -45,7 +46,7 @@ function createOverlayIcon(product: DetectedProduct): HTMLDivElement {
     background: "#10b981",
     border: "1.5px solid white",
     display: "none",
-  } as CSSStyleDeclaration);
+  });
   el.appendChild(dot);
 
   // Hover effects
@@ -92,11 +93,7 @@ export function injectOverlays(products: DetectedProduct[]): void {
   removeOverlays();
 
   for (const product of products) {
-    const imgEl = document.querySelector(
-      `img[src="${product.imageUrl}"]`
-    ) ?? document.querySelector(
-      `img[src*="${product.imageUrl.split("/").pop()}"]`
-    );
+    const imgEl = findImageByUrl(product.imageUrl);
     if (!imgEl) continue;
 
     const overlay = createOverlayIcon(product);

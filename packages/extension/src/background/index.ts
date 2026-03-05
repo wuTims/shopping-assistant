@@ -7,6 +7,7 @@ import type {
   PanelState,
   ContentToBackgroundMessage,
   SidePanelToBackgroundMessage,
+  BackgroundToSidePanelMessage,
 } from "@shopping-assistant/shared";
 import { SEARCH_TIMEOUT_MS, CHAT_TIMEOUT_MS } from "@shopping-assistant/shared";
 import { getCached, setCached, cleanupStaleEntries } from "./cache";
@@ -16,6 +17,8 @@ console.log("[Personal Shopper] Service worker started");
 const BACKEND_URL = "http://localhost:8080";
 
 // ── Current state (in-memory, survives while SW is alive) ──
+// TODO: persist to chrome.storage.session for MV3 SW restart resilience
+let activeSearchId = 0;
 let currentState: PanelState = {
   view: "empty",
   product: null,
@@ -27,11 +30,11 @@ let currentState: PanelState = {
 // ── Lifecycle ──
 
 chrome.runtime.onInstalled.addListener(() => {
-  cleanupStaleEntries();
+  cleanupStaleEntries().catch(console.error);
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  cleanupStaleEntries();
+  cleanupStaleEntries().catch(console.error);
 });
 
 // Open side panel on extension icon click
@@ -80,6 +83,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // ── Search flow ──
 
 async function handleProductClicked(product: DetectedProduct, tabId?: number): Promise<void> {
+  const searchId = ++activeSearchId;
+
   // Open side panel
   if (tabId) {
     chrome.sidePanel.open({ tabId });
@@ -87,6 +92,7 @@ async function handleProductClicked(product: DetectedProduct, tabId?: number): P
 
   // Check cache first
   const cached = await getCached(product.id);
+  if (searchId !== activeSearchId) return; // superseded by newer click
   if (cached) {
     currentState = { view: "results", product, response: cached, error: null, loadingPhase: null };
     broadcast({ type: "SEARCH_COMPLETE", product, response: cached });
@@ -127,9 +133,11 @@ async function handleProductClicked(product: DetectedProduct, tabId?: number): P
     const response: SearchResponse = await res.json();
     await setCached(product.id, response);
 
+    if (searchId !== activeSearchId) return; // superseded by newer click
     currentState = { view: "results", product, response, error: null, loadingPhase: null };
     broadcast({ type: "SEARCH_COMPLETE", product, response });
   } catch (err) {
+    if (searchId !== activeSearchId) return; // superseded by newer click
     const errorMsg = err instanceof Error ? err.message : "Search failed";
     currentState = { view: "error", product, response: null, error: errorMsg, loadingPhase: null };
     broadcast({ type: "SEARCH_ERROR", product, error: errorMsg });
@@ -166,7 +174,7 @@ async function handleChatRequest(request: ChatRequest): Promise<void> {
 
 // ── Broadcast to side panel ──
 
-function broadcast(message: Record<string, unknown>): void {
+function broadcast(message: BackgroundToSidePanelMessage): void {
   chrome.runtime.sendMessage(message).catch(() => {
     // Side panel may not be open — safe to ignore
   });
