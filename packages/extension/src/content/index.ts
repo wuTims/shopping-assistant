@@ -1,11 +1,36 @@
-import type { DetectedProduct } from "@shopping-assistant/shared";
+import { detectProducts } from "./detection";
+import { injectOverlays, removeOverlays } from "./overlay";
 
-console.log("[Shopping Assistant] Content script loaded");
+console.log("[Personal Shopper] Content script loaded");
 
-// Placeholder: DOM heuristic detection will be implemented here
-function detectProducts(): DetectedProduct[] {
-  // TODO: Implement schema.org, OG tags, price pattern detection
-  return [];
+let lastUrl = location.href;
+
+function run(): void {
+  const products = detectProducts();
+  if (products.length > 0) {
+    console.log(`[Personal Shopper] Detected ${products.length} product(s)`);
+    injectOverlays(products);
+    chrome.runtime.sendMessage({ type: "PRODUCTS_DETECTED", products });
+  }
 }
 
-detectProducts();
+// Initial detection
+run();
+
+// SPA navigation observer: re-detect on URL changes
+const observer = new MutationObserver(() => {
+  if (location.href !== lastUrl) {
+    lastUrl = location.href;
+    removeOverlays();
+    // Small delay to let new page content render
+    setTimeout(run, 500);
+  }
+});
+
+observer.observe(document.body, { childList: true, subtree: true });
+
+// Also handle popstate for History API navigation
+window.addEventListener("popstate", () => {
+  removeOverlays();
+  setTimeout(run, 500);
+});
