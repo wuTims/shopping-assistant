@@ -48,9 +48,8 @@ The primary interface for results and interaction. Opens when user clicks a prod
 **Layout structure (top to bottom):**
 
 #### Header Bar
-- Extension name/logo (left)
+- `shopping_bag` icon + "Personal Shopper" branding (left)
 - Settings gear icon (right) — opens minimal settings (clear cache, about)
-- Back arrow (left, visible when in chat view) — returns to results view
 
 #### Original Product Section
 - Small thumbnail of the detected product image (48x48, rounded corners)
@@ -81,40 +80,25 @@ The primary interface for results and interaction. Opens when user clicks a prod
   - Low confidence: small gray dot or "May differ" label
 - Click anywhere on the card → opens product URL in a new tab
 
-#### Chat Section
-- Fixed at the bottom of the side panel
-- "Chat Now" button (prominent, colored) when chat is collapsed
-- Expands to a chat view that replaces the results view (with back arrow to return)
-- Text input field with send button
-- Microphone button (left of send button) for voice input
-- Chat messages displayed in a standard conversational thread layout
+#### Input & Chat Section
+- Fixed input bar at the bottom of the side panel (always visible once results load)
+- Text input field with send button + hold-to-talk microphone button
+- On results load, a text nudge bubble appears above input: "I can help you compare — hold 🎤 or type below."
+- First interaction (voice or text) splits the panel: results compress to ~40% top, chat takes ~60% bottom
+- Chat messages displayed in a standard conversational thread layout within the split
 - Assistant messages can include inline product references (clickable links to results)
+- Voice messages show 🔊 icon; text-only responses do not
 
----
+> **Revised 2026-03-05:** Replaced separate "Chat Now" → chat view pattern with integrated split panel.
+> See `docs/plans/2026-03-05-voice-interaction-design.md` for full voice interaction design.
 
-### 3. Chat View (Expanded)
-
-When the user taps "Chat Now" or sends a message, the side panel transitions to a chat-focused layout.
-
-**Layout:**
-
-#### Header
-- Back arrow (returns to results view)
-- "Shopping Assistant" title
-- Product thumbnail strip: horizontal scrollable row of small thumbnails showing the original product and top results, each with a price badge overlay. Tapping a thumbnail scrolls the chat to the relevant comparison or inserts context into the conversation.
-
-#### Message Thread
-- Standard chat bubble layout
-- User messages: right-aligned, colored background
-- Assistant messages: left-aligned, light background
-- Assistant can reference specific results inline: "The **AliExpress listing** at $24.99 looks like the closest match — [view listing](#)"
-- Typing indicator while waiting for response
-
-#### Input Area
-- Text input field (full width minus button)
-- Microphone button: tap to start recording, tap again to stop. While recording, the button pulses/animates and the text input shows "Listening..."
-- Send button (right side)
-- When voice is active, audio response plays automatically through the device speaker. User can interrupt (barge-in) by speaking again or tapping the mic button.
+#### Voice Input (Hold-to-Talk)
+- User holds mic button to record (mousedown/touchstart), releases to send (mouseup/touchend)
+- While held: mic button pulses red, live waveform + timer replaces text input area
+- Audio streams to backend via WebSocket → Gemini Live API
+- On release: user speech appears as transcript bubble, assistant responds with audio + transcript
+- Barge-in: pressing mic during audio playback stops playback and starts new recording
+- Text input remains available as secondary input method, using REST `/chat` endpoint
 
 ---
 
@@ -145,29 +129,27 @@ When the user taps "Chat Now" or sends a message, the side panel transitions to 
 
 ```
 1. User has search results displayed in side panel (from Flow A)
-2. User taps "Chat Now" at bottom of results
-3. Side panel transitions to chat view
-4. Product thumbnail strip shows original + top results at top
-5. Assistant greeting: "Hi, what can I help you with?"
-6. User types: "Is the AliExpress one the same quality?"
-7. Assistant responds with comparison analysis, referencing the specific products
-8. User types: "What about shipping time?"
-9. Assistant provides estimated shipping comparison
-10. User taps back arrow to return to results view
+2. Assistant nudge visible: "I can help you compare — hold mic or type below."
+3. User types in input bar: "Is the AliExpress one the same quality?"
+4. Panel splits: results compress to top ~40%, chat appears in bottom ~60%
+5. Assistant responds with comparison analysis, referencing specific products
+6. User types: "What about shipping time?"
+7. Assistant provides estimated shipping comparison
+8. Results remain scrollable above the chat thread
 ```
 
 ### Flow C: Compare → Voice Conversation
 
 ```
 1. User has search results displayed in side panel
-2. User taps "Chat Now" → chat view opens
-3. User taps microphone button
-4. Mic button pulses, text input shows "Listening..."
-5. User speaks: "Which one of these is the best deal?"
+2. User holds microphone button (mousedown/touchstart)
+3. Panel splits, mic button pulses red, waveform + timer appear
+4. User speaks: "Which one of these is the best deal?"
+5. User releases mic button (mouseup/touchend)
 6. Audio streams to Cloud Run → Gemini Live API
-7. Assistant responds via audio (auto-plays) + transcript appears in chat
-8. User can interrupt by speaking again (barge-in)
-9. User taps mic button again to stop voice mode
+7. User's speech appears as transcript bubble
+8. Assistant responds via audio (auto-plays) + transcript appears in chat
+9. User holds mic again while audio plays → barge-in (audio stops, new recording)
 10. Can seamlessly switch to text input without losing context
 ```
 
@@ -219,17 +201,19 @@ Loading feedback is critical because the search takes 4-10 seconds. The user mus
 Keep the visual treatment clean and product-focused. The extension UI should not compete with the host page or the product images.
 
 **Palette:**
-- Background: white (#FFFFFF)
-- Card background: light gray (#F8F9FA)
-- Primary accent: the extension's brand color (for buttons, active states)
-- Savings indicator: green (#22C55E) — used for percentage badges and "fair/low price" labels
+- Background: warm cream (#FDFAF5)
+- Card/surface: white (#FFFFFF)
+- Primary accent: orange (#D95A00) — buttons, branding, active states
+- Primary hover: dark orange (#B34800)
+- Savings indicator: green (#10B981) — percentage badges, "fair/low price" labels
 - Warning/high price: red (#EF4444)
-- Neutral text: dark gray (#1F2937)
-- Secondary text: medium gray (#6B7280)
+- Caution: yellow (#F59E0B)
+- Neutral text: dark gray (#1A202C)
+- Secondary text: medium gray (#4A5568)
 - Borders: light gray (#E5E7EB)
 
 **Typography:**
-- System font stack: `-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`
+- Font family: Inter (Google Fonts), sans-serif fallback
 - Product titles: 14px, medium weight
 - Prices: 16px, bold
 - Body text / chat: 14px, regular
@@ -255,14 +239,15 @@ Keep the visual treatment clean and product-focused. The extension UI should not
 - **Click:** Opens product URL in new tab. Brief press feedback (scale down slightly).
 
 ### Chat Input
-- **Text mode (default):** Standard text input. Enter key or send button submits.
-- **Voice mode:** Tap mic button to toggle. While active, text input is replaced with "Listening..." and a waveform visualization. Tap mic again or tap text input area to return to text mode.
-- **Mode persistence:** Stays in whichever mode the user last used until explicitly switched.
+- **Text mode (default):** Standard text input. Enter key or send button submits via REST `/chat` endpoint.
+- **Voice mode (hold-to-talk):** Hold mic button to record. Waveform + timer replace text input while held. Release sends audio via WebSocket `/live`. Assistant responds with audio + transcript.
+- **Seamless switching:** Text and voice messages interleave in the same chat thread. No mode toggle needed.
 
 ### Side Panel Transitions
-- Results view ↔ Chat view: slide transition (chat slides in from right)
-- Back arrow always returns to results view
-- Chat history is preserved when switching between views
+- Results → Results+Chat: smooth split animation on first interaction (results compress upward, chat area expands from bottom)
+- Price context bar collapses on split (expandable on tap)
+- Result cards switch to compact single-row format
+- Chat history preserved for the session
 
 ---
 
