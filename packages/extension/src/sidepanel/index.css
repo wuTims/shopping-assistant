@@ -9,10 +9,9 @@
 }
 
 body {
+  @apply bg-background text-text-main;
   font-family: "Inter", sans-serif;
   width: 360px;
-  background: #fdfaf5;
-  color: #1a202c;
 }
 
 .no-scrollbar::-webkit-scrollbar {
