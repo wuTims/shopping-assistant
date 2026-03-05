@@ -161,6 +161,42 @@ export interface ChatResponse {
   reply: string;
 }
 
+// === Extension Internal Messages ===
+
+/** Content Script → Service Worker */
+export type ContentToBackgroundMessage =
+  | { type: "PRODUCT_CLICKED"; product: DetectedProduct }
+  | { type: "PRODUCTS_DETECTED"; products: DetectedProduct[] };
+
+/** Service Worker → Side Panel */
+export type BackgroundToSidePanelMessage =
+  | { type: "SEARCH_STARTED"; product: DetectedProduct }
+  | { type: "SEARCH_COMPLETE"; product: DetectedProduct; response: SearchResponse }
+  | { type: "SEARCH_ERROR"; product: DetectedProduct; error: string }
+  | { type: "CHAT_RESPONSE"; reply: string }
+  | { type: "CHAT_ERROR"; error: string };
+
+/** Side Panel → Service Worker */
+export type SidePanelToBackgroundMessage =
+  | { type: "GET_STATE" }
+  | { type: "CHAT_REQUEST"; request: ChatRequest }
+  | { type: "GET_BACKEND_URL" };
+
+/** Service Worker → Side Panel: response to GET_STATE */
+export interface PanelState {
+  view: "empty" | "loading" | "results" | "error";
+  product: DetectedProduct | null;
+  response: SearchResponse | null;
+  error: string | null;
+  loadingPhase: 1 | 2 | 3 | null;
+}
+
+/** Union of all extension messages (for runtime type narrowing) */
+export type ExtensionMessage =
+  | ContentToBackgroundMessage
+  | BackgroundToSidePanelMessage
+  | SidePanelToBackgroundMessage;
+
 // === WebSocket Messages ===
 
 export type WsClientMessage =
