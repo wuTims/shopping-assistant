@@ -15,6 +15,7 @@ import {
 } from "../services/gemini.js";
 import type { FetchedImage } from "../services/gemini.js";
 import { searchProducts } from "../services/brave.js";
+import { generateMarketplaceQueries } from "../utils/marketplace-queries.js";
 import type { ProviderSearchOutcome, ProviderStatus } from "../services/provider-outcome.js";
 import {
   mergeAndDedup,
@@ -82,22 +83,26 @@ searchRoute.post("/", async (c) => {
     console.error(`[search:${requestId}] Brave (title) failed:`, titleBraveResult.reason);
   }
 
-  // ── Phase 2: grounded search + brave(AI queries) in parallel ──────────────
+  // ── Phase 2: parallel search — grounding + brave(AI) + brave(marketplace) ──
 
   const aiQueries = identification.searchQueries;
-  const deadline = Math.max(remaining() - 4000, 3000);
+  const marketplaceQueries = generateMarketplaceQueries(
+    identification.description || body.title || "",
+  );
+  const phase2Deadline = Math.max(remaining() - 4000, 3000);
 
-  const phase2Promises: [
-    Promise<ProviderSearchOutcome>,
-    Promise<ProviderSearchOutcome>,
-  ] = [
-    withTimeout(groundedSearch(aiQueries), deadline),
-    hasNewQueries(aiQueries, titleQueries)
-      ? withTimeout(searchProducts(aiQueries), deadline)
-      : Promise.resolve(emptyProviderOutcome()),
-  ];
+  const skipAiBrave = !hasNewQueries(aiQueries, titleQueries);
 
-  const [groundingResult, aiBraveResult] = await Promise.allSettled(phase2Promises);
+  const [groundingResult, aiBraveResult, marketplaceBraveResult] =
+    await Promise.allSettled([
+      withTimeout(groundedSearch(aiQueries), phase2Deadline),
+      skipAiBrave
+        ? Promise.resolve(emptyProviderOutcome())
+        : withTimeout(searchProducts(aiQueries), phase2Deadline),
+      marketplaceQueries.length > 0
+        ? withTimeout(searchProducts(marketplaceQueries), phase2Deadline)
+        : Promise.resolve(emptyProviderOutcome()),
+    ]);
 
   const groundingOutcome = groundingResult.status === "fulfilled"
     ? groundingResult.value
@@ -105,6 +110,10 @@ searchRoute.post("/", async (c) => {
   const aiBraveOutcome = aiBraveResult.status === "fulfilled"
     ? aiBraveResult.value
     : rejectedProviderOutcome(aiQueries.length, aiBraveResult.reason);
+  const marketplaceBraveOutcome: ProviderSearchOutcome =
+    marketplaceBraveResult.status === "fulfilled"
+      ? marketplaceBraveResult.value
+      : rejectedProviderOutcome(marketplaceQueries.length, marketplaceBraveResult.reason);
 
   if (groundingResult.status === "rejected") {
     console.error(`[search:${requestId}] Grounding failed:`, groundingResult.reason);
@@ -112,9 +121,15 @@ searchRoute.post("/", async (c) => {
   if (aiBraveResult.status === "rejected") {
     console.error(`[search:${requestId}] Brave (AI) failed:`, aiBraveResult.reason);
   }
+  if (marketplaceBraveResult.status === "rejected") {
+    console.error(`[search:${requestId}] Brave (marketplace) failed:`, marketplaceBraveResult.reason);
+  }
 
   // Combine brave outcomes
-  const braveOutcome = combineBraveOutcomes(titleBraveOutcome, aiBraveOutcome);
+  const braveOutcome = combineBraveOutcomes(
+    combineBraveOutcomes(titleBraveOutcome, aiBraveOutcome),
+    marketplaceBraveOutcome,
+  );
 
   // ── Phase 3: merge → dedup → heuristicPreSort → cap → fetch images ───────
 
