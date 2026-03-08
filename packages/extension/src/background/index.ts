@@ -75,15 +75,39 @@ chrome.action.onClicked.addListener(async (tab) => {
   }
 });
 
-// Listen for product selection from side panel
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+// Listen for product selection from side panel AND image clicks from content script
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "select_product") {
     const { tabId, product, screenshotDataUrl, pageUrl } = message;
     searchForProduct(tabId, product, screenshotDataUrl, pageUrl).then(() =>
       sendResponse({ status: "ok" }),
     );
-    return true; // async response
+    return true;
   }
+
+  if (message.type === "IMAGE_CLICKED") {
+    const tabId = sender.tab?.id;
+    if (!tabId) return false;
+
+    const { imageUrl, titleHint, pageUrl } = message;
+
+    (async () => {
+      await chrome.sidePanel.open({ tabId });
+
+      const product = {
+        name: titleHint || "Product",
+        price: null as number | null,
+        currency: null as string | null,
+      };
+
+      notifySidePanel(tabId, { type: "searching", product });
+      await searchForProduct(tabId, product, "", pageUrl, imageUrl);
+      sendResponse({ status: "ok" });
+    })();
+
+    return true;
+  }
+
   return false;
 });
 
@@ -92,6 +116,7 @@ async function searchForProduct(
   product: { name: string; price: number | null; currency: string | null },
   screenshotDataUrl: string,
   pageUrl: string,
+  imageUrl?: string,
 ): Promise<void> {
   // Check cache first
   const cacheKey = `search:${product.name}:${pageUrl}`;
@@ -103,11 +128,13 @@ async function searchForProduct(
 
   try {
     const searchReq: SearchRequest = {
-      imageUrl: "",
-      imageBase64: screenshotDataUrl.includes(",")
-        ? screenshotDataUrl.split(",")[1]
-        : screenshotDataUrl,
-      title: product.name,
+      imageUrl: imageUrl ?? "",
+      imageBase64: !imageUrl && screenshotDataUrl
+        ? (screenshotDataUrl.includes(",")
+          ? screenshotDataUrl.split(",")[1]
+          : screenshotDataUrl)
+        : null,
+      title: product.name !== "Product" ? product.name : null,
       price: product.price,
       currency: product.currency,
       sourceUrl: pageUrl,
