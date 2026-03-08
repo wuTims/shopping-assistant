@@ -78,6 +78,7 @@ export function applyRanking(
       savingsPercent,
       comparisonNotes: notes.join(". "),
       rank: 0, // assigned after sorting
+      priceAvailable: result.price != null,
     });
   }
 
