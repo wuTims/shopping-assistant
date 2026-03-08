@@ -88,6 +88,79 @@ export async function identifyProduct(
   return { identification, originalImage: productImage };
 }
 
+// ── identifyFromScreenshot ───────────────────────────────────────────────
+
+export async function identifyFromScreenshot(
+  screenshotBase64: string,
+): Promise<{ products: Array<{ name: string; price: number | null; currency: string | null; boundingBox: { x: number; y: number; width: number; height: number } | null }>; pageType: "product_detail" | "product_listing" | "unknown" }> {
+  const prompt = `You are analyzing a screenshot of a web page. Identify all products visible in this screenshot.
+
+For each product, extract:
+- name: the product name/title
+- price: the displayed price as a number (null if not visible)
+- currency: the currency code (USD, GBP, EUR, CNY, etc.) or null
+- boundingBox: approximate pixel coordinates {x, y, width, height} of the product in the image, or null if unclear
+
+Also determine the page type:
+- "product_detail" if this is a single product page (one main product)
+- "product_listing" if this shows multiple products (search results, category page)
+- "unknown" if uncertain
+
+Return JSON only.`;
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { inlineData: { mimeType: "image/png", data: screenshotBase64 } },
+          { text: prompt },
+        ],
+      },
+    ],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: "object" as const,
+        properties: {
+          products: {
+            type: "array" as const,
+            items: {
+              type: "object" as const,
+              properties: {
+                name: { type: "string" as const },
+                price: { type: "number" as const, nullable: true },
+                currency: { type: "string" as const, nullable: true },
+                boundingBox: {
+                  type: "object" as const,
+                  nullable: true,
+                  properties: {
+                    x: { type: "number" as const },
+                    y: { type: "number" as const },
+                    width: { type: "number" as const },
+                    height: { type: "number" as const },
+                  },
+                  required: ["x", "y", "width", "height"],
+                },
+              },
+              required: ["name", "price", "currency", "boundingBox"],
+            },
+          },
+          pageType: {
+            type: "string" as const,
+            enum: ["product_detail", "product_listing", "unknown"],
+          },
+        },
+        required: ["products", "pageType"],
+      },
+    },
+  });
+
+  const text = response.text ?? "{}";
+  return JSON.parse(text);
+}
+
 // ── groundedSearch ───────────────────────────────────────────────────────────
 
 export async function groundedSearch(queries: string[]): Promise<ProviderSearchOutcome> {
