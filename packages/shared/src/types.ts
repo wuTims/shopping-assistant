@@ -51,7 +51,7 @@ export interface IdentifyResponse {
 }
 
 export interface SearchRequest {
-  imageUrl: string;
+  imageUrl: string | null;
   imageBase64: string | null;
   title: string | null;
   price: number | null;

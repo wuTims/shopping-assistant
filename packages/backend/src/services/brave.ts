@@ -131,10 +131,10 @@ export function parsePrice(raw: string | null): { price: number | null; currency
   // Match patterns like "$29.99", "£15.00", "€42", "USD 29.99"
   const match = raw.match(/([£$€¥])\s*([\d,]+(?:\.\d{1,2})?)/);
   if (match) {
-    const currencyMap: Record<string, string> = { "$": "USD", "£": "GBP", "€": "EUR", "¥": "CNY" };
+    const currencyMap: Record<string, string | null> = { "$": "USD", "£": "GBP", "€": "EUR", "¥": null };
     return {
       price: parseFloat(match[2].replace(/,/g, "")),
-      currency: currencyMap[match[1]] ?? "USD",
+      currency: currencyMap[match[1]] ?? null,
     };
   }
 

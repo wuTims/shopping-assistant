@@ -1,8 +1,12 @@
 import {
   OVERLAY_ICON_SIZE_PX,
+  OVERLAY_ICON_HOVER_SIZE_PX,
   MIN_IMAGE_SIZE_PX,
   OVERLAY_TITLE_HINT_MAX_LENGTH,
 } from "@shopping-assistant/shared";
+
+const OVERLAY_HOVER_SCALE = OVERLAY_ICON_HOVER_SIZE_PX / OVERLAY_ICON_SIZE_PX;
+const BOUND_ATTR = "data-shopping-assistant-bound";
 
 const OVERLAY_ATTR = "data-shopping-assistant-overlay";
 
@@ -34,7 +38,7 @@ function createOverlayIcon(img: HTMLImageElement): HTMLDivElement {
   el.appendChild(icon);
 
   el.addEventListener("mouseenter", () => {
-    el.style.transform = "scale(1.14)";
+    el.style.transform = `scale(${OVERLAY_HOVER_SCALE})`;
     el.style.boxShadow = "0 4px 12px rgba(0,0,0,0.2)";
     el.title = "Find cheaper alternatives";
   });
@@ -82,49 +86,80 @@ function positionOverlay(overlay: HTMLElement, img: HTMLImageElement): void {
 }
 
 let activeOverlay: { el: HTMLDivElement; img: HTMLImageElement } | null = null;
+let hideTimeout: ReturnType<typeof setTimeout> | null = null;
 
 function showOverlay(img: HTMLImageElement): void {
+  if (hideTimeout) {
+    clearTimeout(hideTimeout);
+    hideTimeout = null;
+  }
   if (activeOverlay?.img === img) return;
   hideOverlay();
 
+  const parent = img.parentElement;
+  if (!parent) return;
+
   const overlay = createOverlayIcon(img);
   positionOverlay(overlay, img);
-  img.parentElement!.appendChild(overlay);
+  parent.appendChild(overlay);
   activeOverlay = { el: overlay, img };
+
+  overlay.addEventListener("mouseleave", scheduleHide);
+  img.addEventListener("mouseleave", scheduleHide);
+}
+
+function scheduleHide(): void {
+  if (hideTimeout) clearTimeout(hideTimeout);
+  hideTimeout = setTimeout(() => {
+    if (!activeOverlay) return;
+    hideOverlay();
+  }, 80);
 }
 
 function hideOverlay(): void {
+  if (hideTimeout) {
+    clearTimeout(hideTimeout);
+    hideTimeout = null;
+  }
   if (activeOverlay) {
     activeOverlay.el.remove();
     activeOverlay = null;
   }
 }
 
+function attachOverlay(img: HTMLImageElement): void {
+  if (img.dataset.shoppingAssistantBound) return;
+  if (img.naturalWidth < MIN_IMAGE_SIZE_PX || img.naturalHeight < MIN_IMAGE_SIZE_PX) return;
+  img.dataset.shoppingAssistantBound = "1";
+
+  img.addEventListener("mouseenter", () => showOverlay(img));
+  img.addEventListener("mouseleave", (e) => {
+    const related = e.relatedTarget as Node | null;
+    if (activeOverlay && related && activeOverlay.el.contains(related)) return;
+    scheduleHide();
+  });
+}
+
 export function initOverlays(): void {
   const imgs = document.querySelectorAll<HTMLImageElement>("img");
-
   for (const img of imgs) {
-    if (img.naturalWidth < MIN_IMAGE_SIZE_PX || img.naturalHeight < MIN_IMAGE_SIZE_PX) {
-      continue;
-    }
-
-    img.addEventListener("mouseenter", () => showOverlay(img));
-    img.addEventListener("mouseleave", (e) => {
-      const related = e.relatedTarget as Node | null;
-      if (activeOverlay && related && activeOverlay.el.contains(related)) return;
-      hideOverlay();
-    });
+    attachOverlay(img);
   }
 
-  // Also hide when mouse leaves the overlay itself
-  document.addEventListener("mouseover", (e) => {
-    if (!activeOverlay) return;
-    const target = e.target as Node;
-    if (
-      !activeOverlay.el.contains(target) &&
-      target !== activeOverlay.img
-    ) {
-      hideOverlay();
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      for (const node of mutation.addedNodes) {
+        if (node instanceof HTMLImageElement) {
+          attachOverlay(node);
+        }
+        if (node instanceof HTMLElement) {
+          for (const img of node.querySelectorAll<HTMLImageElement>("img")) {
+            attachOverlay(img);
+          }
+        }
+      }
     }
   });
+
+  observer.observe(document.body, { childList: true, subtree: true });
 }

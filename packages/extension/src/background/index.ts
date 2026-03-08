@@ -17,6 +17,8 @@ chrome.action.onClicked.addListener(async (tab) => {
   await chrome.sidePanel.open({ tabId: tab.id });
 
   try {
+    notifySidePanel(tab.id, { type: "identifying" });
+
     // Capture visible tab screenshot
     const screenshotDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: "png",
@@ -78,8 +80,10 @@ chrome.action.onClicked.addListener(async (tab) => {
 // Listen for product selection from side panel AND image clicks from content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "select_product") {
-    const { tabId, product, screenshotDataUrl, pageUrl } = message;
-    searchForProduct(tabId, product, screenshotDataUrl, pageUrl).then(() =>
+    const { product, screenshotDataUrl, pageUrl } = message;
+    const effectiveTabId = message.tabId ?? sender.tab?.id;
+    if (!effectiveTabId) return false;
+    searchForProduct(effectiveTabId, product, screenshotDataUrl, pageUrl).then(() =>
       sendResponse({ status: "ok" }),
     );
     return true;
@@ -100,7 +104,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         currency: null as string | null,
       };
 
-      notifySidePanel(tabId, { type: "searching", product });
       await searchForProduct(tabId, product, "", pageUrl, imageUrl);
       sendResponse({ status: "ok" });
     })();
@@ -128,7 +131,7 @@ async function searchForProduct(
 
   try {
     const searchReq: SearchRequest = {
-      imageUrl: imageUrl ?? "",
+      imageUrl: imageUrl || null,
       imageBase64: !imageUrl && screenshotDataUrl
         ? (screenshotDataUrl.includes(",")
           ? screenshotDataUrl.split(",")[1]

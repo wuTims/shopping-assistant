@@ -14,12 +14,12 @@ describe("parsePrice", () => {
     expect(parsePrice("€42")).toEqual({ price: 42, currency: "EUR" });
   });
 
-  it("parses CNY/JPY with ¥ symbol", () => {
-    expect(parsePrice("¥1280")).toEqual({ price: 1280, currency: "CNY" });
+  it("returns null currency for ambiguous ¥ symbol", () => {
+    expect(parsePrice("¥1280")).toEqual({ price: 1280, currency: null });
   });
 
-  it("parses ¥ with decimals", () => {
-    expect(parsePrice("¥99.50")).toEqual({ price: 99.5, currency: "CNY" });
+  it("returns null currency for ¥ with decimals", () => {
+    expect(parsePrice("¥99.50")).toEqual({ price: 99.5, currency: null });
   });
 
   it("parses CNY currency code", () => {

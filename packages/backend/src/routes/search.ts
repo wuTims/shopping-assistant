@@ -38,8 +38,8 @@ searchRoute.post("/", async (c) => {
     return c.json({ error: "bad_request", message: "Invalid JSON body" }, 400);
   }
 
-  if (!body.imageUrl || typeof body.imageUrl !== "string") {
-    return c.json({ error: "bad_request", message: "imageUrl is required and must be a string" }, 400);
+  if (!body.imageUrl && !body.imageBase64) {
+    return c.json({ error: "bad_request", message: "imageUrl or imageBase64 is required" }, 400);
   }
   if (body.title !== undefined && body.title !== null && typeof body.title !== "string") {
     return c.json({ error: "bad_request", message: "title must be a string or null" }, 400);
@@ -55,14 +55,18 @@ searchRoute.post("/", async (c) => {
   const searchStart = Date.now();
   const remaining = () => SEARCH_TIMEOUT_MS - (Date.now() - searchStart);
 
-  console.log(`[search:${requestId}] Request for: ${body.title ?? body.imageUrl}`);
+  console.log(`[search:${requestId}] Request for: ${body.title ?? body.imageUrl ?? "(base64 image)"}`);
 
   // ── Phase 1: identify product + brave(title queries) in parallel ──────────
+
+  const imageSource = body.imageUrl
+    ? body.imageUrl
+    : { data: body.imageBase64!, mimeType: "image/png" } as FetchedImage;
 
   const titleQueries = buildTitleQueries(body.title, body.sourceUrl);
 
   const [identifyResult, titleBraveResult] = await Promise.allSettled([
-    identifyProduct(body.imageUrl, body.title),
+    identifyProduct(imageSource, body.title),
     titleQueries.length > 0
       ? withTimeout(searchProducts(titleQueries), Math.max(remaining() - 1000, 5000))
       : Promise.resolve(emptyProviderOutcome()),
@@ -223,7 +227,7 @@ searchRoute.post("/", async (c) => {
       title: body.title,
       price: body.price,
       currency: body.currency,
-      imageUrl: body.imageUrl,
+      imageUrl: body.imageUrl ?? "",
       identification,
     },
     results: ranked,

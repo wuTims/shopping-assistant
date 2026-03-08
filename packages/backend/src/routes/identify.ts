@@ -19,11 +19,12 @@ identify.post("/", async (c) => {
     : body.screenshot;
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), IDENTIFY_TIMEOUT_MS);
-
-    const result = await identifyFromScreenshot(base64Data);
-    clearTimeout(timeout);
+    const result = await Promise.race([
+      identifyFromScreenshot(base64Data),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Identify timed out")), IDENTIFY_TIMEOUT_MS),
+      ),
+    ]);
 
     const response: IdentifyResponse = {
       products: result.products.map((p) => ({

@@ -1,14 +1,20 @@
 import { chromium, type Browser } from "playwright";
 import { ai, geminiModel as model } from "./ai-client.js";
-import { PRICE_FALLBACK_TIMEOUT_MS } from "@shopping-assistant/shared";
+import { PRICE_NAV_TIMEOUT_MS } from "@shopping-assistant/shared";
 
 let browser: Browser | null = null;
+let launching: Promise<Browser> | null = null;
 
 async function getBrowser(): Promise<Browser> {
-  if (!browser || !browser.isConnected()) {
-    browser = await chromium.launch({ headless: true });
+  if (browser && browser.isConnected()) return browser;
+  if (!launching) {
+    launching = chromium.launch({ headless: true }).then((b) => {
+      browser = b;
+      launching = null;
+      return b;
+    });
   }
-  return browser;
+  return launching;
 }
 
 export async function extractPriceFromUrl(
@@ -23,9 +29,9 @@ export async function extractPriceFromUrl(
   const page = await context.newPage();
 
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: PRICE_FALLBACK_TIMEOUT_MS });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: PRICE_NAV_TIMEOUT_MS });
     // Wait briefly for dynamic price rendering
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(500);
 
     const screenshot = await page.screenshot({ type: "png" });
     const base64 = screenshot.toString("base64");

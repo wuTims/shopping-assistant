@@ -21,6 +21,9 @@ export default function App() {
       if (message.target !== "sidepanel") return;
 
       switch (message.type) {
+        case "identifying":
+          setState({ kind: "identifying" });
+          break;
         case "product_selection":
           setState({
             kind: "product_selection",

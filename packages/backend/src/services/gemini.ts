@@ -26,7 +26,7 @@ export interface IdentifyProductResult {
 }
 
 export async function identifyProduct(
-  imageUrl: string,
+  imageSource: string | FetchedImage,
   title: string | null,
 ): Promise<IdentifyProductResult> {
   const prompt = [
@@ -37,7 +37,9 @@ export async function identifyProduct(
     title ? `Product title from the page: "${title}"` : "No product title available — rely on the image.",
   ].join("\n");
 
-  const productImage = await fetchImage(imageUrl);
+  const productImage = typeof imageSource === "string"
+    ? await fetchImage(imageSource)
+    : imageSource;
 
   const response = await ai.models.generateContent({
     model,
