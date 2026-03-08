@@ -27,8 +27,31 @@ export interface DetectedProduct {
 
 // === Search Request/Response ===
 
+export interface IdentifyRequest {
+  screenshot: string; // base64 PNG from captureVisibleTab
+  pageUrl: string;
+}
+
+export interface IdentifiedProduct {
+  name: string;
+  price: number | null;
+  currency: string | null;
+  boundingBox: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null;
+  imageRegion: string | null; // base64 cropped image of the product
+}
+
+export interface IdentifyResponse {
+  products: IdentifiedProduct[];
+  pageType: "product_detail" | "product_listing" | "unknown";
+}
+
 export interface SearchRequest {
-  imageUrl: string;
+  imageUrl: string | null;
   imageBase64: string | null;
   title: string | null;
   price: number | null;
@@ -82,6 +105,7 @@ export interface RankedResult {
   savingsPercent: number | null;
   comparisonNotes: string;
   rank: number;
+  priceAvailable: boolean;
 }
 
 export interface SearchResponse {

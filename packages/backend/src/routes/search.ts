@@ -5,6 +5,8 @@ import {
   MAX_RESULTS_FOR_RANKING,
   MAX_IMAGES_FOR_RANKING,
   RANKING_IMAGE_TIMEOUT_MS,
+  MAX_PRICE_FALLBACK_RESULTS,
+  PRICE_FALLBACK_TIMEOUT_MS,
 } from "@shopping-assistant/shared";
 import {
   identifyProduct,
@@ -15,6 +17,8 @@ import {
 } from "../services/gemini.js";
 import type { FetchedImage } from "../services/gemini.js";
 import { searchProducts } from "../services/brave.js";
+import { fillMissingPrices } from "../services/price-fallback.js";
+import { generateMarketplaceQueries } from "../utils/marketplace-queries.js";
 import type { ProviderSearchOutcome, ProviderStatus } from "../services/provider-outcome.js";
 import {
   mergeAndDedup,
@@ -34,8 +38,8 @@ searchRoute.post("/", async (c) => {
     return c.json({ error: "bad_request", message: "Invalid JSON body" }, 400);
   }
 
-  if (!body.imageUrl || typeof body.imageUrl !== "string") {
-    return c.json({ error: "bad_request", message: "imageUrl is required and must be a string" }, 400);
+  if (!body.imageUrl && !body.imageBase64) {
+    return c.json({ error: "bad_request", message: "imageUrl or imageBase64 is required" }, 400);
   }
   if (body.title !== undefined && body.title !== null && typeof body.title !== "string") {
     return c.json({ error: "bad_request", message: "title must be a string or null" }, 400);
@@ -51,14 +55,18 @@ searchRoute.post("/", async (c) => {
   const searchStart = Date.now();
   const remaining = () => SEARCH_TIMEOUT_MS - (Date.now() - searchStart);
 
-  console.log(`[search:${requestId}] Request for: ${body.title ?? body.imageUrl}`);
+  console.log(`[search:${requestId}] Request for: ${body.title ?? body.imageUrl ?? "(base64 image)"}`);
 
   // ── Phase 1: identify product + brave(title queries) in parallel ──────────
+
+  const imageSource = body.imageUrl
+    ? body.imageUrl
+    : { data: body.imageBase64!, mimeType: "image/png" } as FetchedImage;
 
   const titleQueries = buildTitleQueries(body.title, body.sourceUrl);
 
   const [identifyResult, titleBraveResult] = await Promise.allSettled([
-    identifyProduct(body.imageUrl, body.title),
+    identifyProduct(imageSource, body.title),
     titleQueries.length > 0
       ? withTimeout(searchProducts(titleQueries), Math.max(remaining() - 1000, 5000))
       : Promise.resolve(emptyProviderOutcome()),
@@ -82,22 +90,26 @@ searchRoute.post("/", async (c) => {
     console.error(`[search:${requestId}] Brave (title) failed:`, titleBraveResult.reason);
   }
 
-  // ── Phase 2: grounded search + brave(AI queries) in parallel ──────────────
+  // ── Phase 2: parallel search — grounding + brave(AI) + brave(marketplace) ──
 
   const aiQueries = identification.searchQueries;
-  const deadline = Math.max(remaining() - 4000, 3000);
+  const marketplaceQueries = generateMarketplaceQueries(
+    identification.description || body.title || "",
+  );
+  const phase2Deadline = Math.max(remaining() - 4000, 3000);
 
-  const phase2Promises: [
-    Promise<ProviderSearchOutcome>,
-    Promise<ProviderSearchOutcome>,
-  ] = [
-    withTimeout(groundedSearch(aiQueries), deadline),
-    hasNewQueries(aiQueries, titleQueries)
-      ? withTimeout(searchProducts(aiQueries), deadline)
-      : Promise.resolve(emptyProviderOutcome()),
-  ];
+  const skipAiBrave = !hasNewQueries(aiQueries, titleQueries);
 
-  const [groundingResult, aiBraveResult] = await Promise.allSettled(phase2Promises);
+  const [groundingResult, aiBraveResult, marketplaceBraveResult] =
+    await Promise.allSettled([
+      withTimeout(groundedSearch(aiQueries), phase2Deadline),
+      skipAiBrave
+        ? Promise.resolve(emptyProviderOutcome())
+        : withTimeout(searchProducts(aiQueries), phase2Deadline),
+      marketplaceQueries.length > 0
+        ? withTimeout(searchProducts(marketplaceQueries), phase2Deadline)
+        : Promise.resolve(emptyProviderOutcome()),
+    ]);
 
   const groundingOutcome = groundingResult.status === "fulfilled"
     ? groundingResult.value
@@ -105,6 +117,10 @@ searchRoute.post("/", async (c) => {
   const aiBraveOutcome = aiBraveResult.status === "fulfilled"
     ? aiBraveResult.value
     : rejectedProviderOutcome(aiQueries.length, aiBraveResult.reason);
+  const marketplaceBraveOutcome: ProviderSearchOutcome =
+    marketplaceBraveResult.status === "fulfilled"
+      ? marketplaceBraveResult.value
+      : rejectedProviderOutcome(marketplaceQueries.length, marketplaceBraveResult.reason);
 
   if (groundingResult.status === "rejected") {
     console.error(`[search:${requestId}] Grounding failed:`, groundingResult.reason);
@@ -112,9 +128,15 @@ searchRoute.post("/", async (c) => {
   if (aiBraveResult.status === "rejected") {
     console.error(`[search:${requestId}] Brave (AI) failed:`, aiBraveResult.reason);
   }
+  if (marketplaceBraveResult.status === "rejected") {
+    console.error(`[search:${requestId}] Brave (marketplace) failed:`, marketplaceBraveResult.reason);
+  }
 
   // Combine brave outcomes
-  const braveOutcome = combineBraveOutcomes(titleBraveOutcome, aiBraveOutcome);
+  const braveOutcome = combineBraveOutcomes(
+    combineBraveOutcomes(titleBraveOutcome, aiBraveOutcome),
+    marketplaceBraveOutcome,
+  );
 
   // ── Phase 3: merge → dedup → heuristicPreSort → cap → fetch images ───────
 
@@ -124,6 +146,28 @@ searchRoute.post("/", async (c) => {
   const capped = preSorted.slice(0, MAX_RESULTS_FOR_RANKING);
 
   console.log(`[search:${requestId}] Results: ${allResults.length} raw → ${deduped.length} deduped → ${capped.length} capped`);
+
+  // ── Phase 3.5: price fallback — screenshot + Gemini Vision for top results missing prices ──
+  if (remaining() > PRICE_FALLBACK_TIMEOUT_MS + 2000) {
+    try {
+      const extractedPrices = await withTimeout(
+        fillMissingPrices(capped, MAX_PRICE_FALLBACK_RESULTS),
+        PRICE_FALLBACK_TIMEOUT_MS,
+      );
+      for (const [id, { price, currency }] of extractedPrices) {
+        const result = capped.find((r) => r.id === id);
+        if (result) {
+          result.price = price;
+          result.currency = currency;
+        }
+      }
+      console.log(`[search:${requestId}] Price fallback filled ${extractedPrices.size} prices`);
+    } catch (err) {
+      console.warn("[search] Price fallback timed out or failed:", err);
+    }
+  } else {
+    console.log("[search] Skipping price fallback — insufficient time remaining");
+  }
 
   // Fetch images for top candidates only
   const imageCandidates = selectImageCandidates(capped, MAX_IMAGES_FOR_RANKING);
@@ -183,7 +227,7 @@ searchRoute.post("/", async (c) => {
       title: body.title,
       price: body.price,
       currency: body.currency,
-      imageUrl: body.imageUrl,
+      imageUrl: body.imageUrl ?? "",
       identification,
     },
     results: ranked,

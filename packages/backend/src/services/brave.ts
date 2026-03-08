@@ -125,21 +125,21 @@ export async function searchProducts(queries: string[]): Promise<ProviderSearchO
 
 // ── Price parsing helpers ────────────────────────────────────────────────────
 
-function parsePrice(raw: string | null): { price: number | null; currency: string | null } {
+export function parsePrice(raw: string | null): { price: number | null; currency: string | null } {
   if (!raw) return { price: null, currency: null };
 
   // Match patterns like "$29.99", "£15.00", "€42", "USD 29.99"
-  const match = raw.match(/([£$€])\s*([\d,]+(?:\.\d{1,2})?)/);
+  const match = raw.match(/([£$€¥])\s*([\d,]+(?:\.\d{1,2})?)/);
   if (match) {
-    const currencyMap: Record<string, string> = { "$": "USD", "£": "GBP", "€": "EUR" };
+    const currencyMap: Record<string, string | null> = { "$": "USD", "£": "GBP", "€": "EUR", "¥": null };
     return {
       price: parseFloat(match[2].replace(/,/g, "")),
-      currency: currencyMap[match[1]] ?? "USD",
+      currency: currencyMap[match[1]] ?? null,
     };
   }
 
   // Try "USD 29.99" pattern
-  const codeMatch = raw.match(/(USD|GBP|EUR|CAD|AUD)\s*([\d,]+(?:\.\d{1,2})?)/);
+  const codeMatch = raw.match(/(USD|GBP|EUR|CAD|AUD|CNY|JPY)\s*([\d,]+(?:\.\d{1,2})?)/);
   if (codeMatch) {
     return {
       price: parseFloat(codeMatch[2].replace(/,/g, "")),

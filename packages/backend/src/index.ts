@@ -6,6 +6,7 @@ import { createNodeWebSocket } from "@hono/node-ws";
 
 import { searchRoute } from "./routes/search.js";
 import { chatRoute } from "./routes/chat.js";
+import identifyRoute from "./routes/identify.js";
 import { liveWebSocket } from "./ws/live.js";
 
 // Fail fast if required env vars are missing
@@ -32,6 +33,7 @@ const corsMiddleware = cors({
 });
 app.use("/health", corsMiddleware);
 app.use("/search/*", corsMiddleware);
+app.use("/identify/*", corsMiddleware);
 app.use("/chat/*", corsMiddleware);
 
 // Health check
@@ -39,6 +41,7 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 
 // Routes
 app.route("/search", searchRoute);
+app.route("/identify", identifyRoute);
 app.route("/chat", chatRoute);
 
 // WebSocket for Live API proxy

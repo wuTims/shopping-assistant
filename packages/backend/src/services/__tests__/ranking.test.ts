@@ -137,6 +137,20 @@ describe("applyRanking", () => {
     expect(ranked[0].savingsPercent).toBeNull();
   });
 
+  it("sets priceAvailable to true when result has price", () => {
+    const results = [makeResult({ id: "a", price: 29.99 })];
+    const scores = { a: 0.8 };
+    const ranked = applyRanking(results, scores, null);
+    expect(ranked[0].priceAvailable).toBe(true);
+  });
+
+  it("sets priceAvailable to false when result has no price", () => {
+    const results = [makeResult({ id: "a", price: null })];
+    const scores = { a: 0.8 };
+    const ranked = applyRanking(results, scores, null);
+    expect(ranked[0].priceAvailable).toBe(false);
+  });
+
   it("maps scores to confidence levels", () => {
     const results = [
       makeResult({ id: "a" }),

@@ -32,4 +32,16 @@ describe("extractMarketplace", () => {
   it("returns Unknown for invalid URLs", () => {
     expect(extractMarketplace("not-a-url")).toBe("Unknown");
   });
+
+  it("recognises DHgate", () => {
+    expect(extractMarketplace("https://www.dhgate.com/product/foo.html")).toBe("DHgate");
+  });
+
+  it("recognises Temu", () => {
+    expect(extractMarketplace("https://www.temu.com/some-product.html")).toBe("Temu");
+  });
+
+  it("recognises 1688", () => {
+    expect(extractMarketplace("https://detail.1688.com/offer/12345.html")).toBe("1688");
+  });
 });
