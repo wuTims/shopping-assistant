@@ -5,6 +5,8 @@ import {
   MAX_RESULTS_FOR_RANKING,
   MAX_IMAGES_FOR_RANKING,
   RANKING_IMAGE_TIMEOUT_MS,
+  MAX_PRICE_FALLBACK_RESULTS,
+  PRICE_FALLBACK_TIMEOUT_MS,
 } from "@shopping-assistant/shared";
 import {
   identifyProduct,
@@ -15,6 +17,7 @@ import {
 } from "../services/gemini.js";
 import type { FetchedImage } from "../services/gemini.js";
 import { searchProducts } from "../services/brave.js";
+import { fillMissingPrices } from "../services/price-fallback.js";
 import { generateMarketplaceQueries } from "../utils/marketplace-queries.js";
 import type { ProviderSearchOutcome, ProviderStatus } from "../services/provider-outcome.js";
 import {
@@ -139,6 +142,28 @@ searchRoute.post("/", async (c) => {
   const capped = preSorted.slice(0, MAX_RESULTS_FOR_RANKING);
 
   console.log(`[search:${requestId}] Results: ${allResults.length} raw → ${deduped.length} deduped → ${capped.length} capped`);
+
+  // ── Phase 3.5: price fallback — screenshot + Gemini Vision for top results missing prices ──
+  if (remaining() > PRICE_FALLBACK_TIMEOUT_MS + 2000) {
+    try {
+      const extractedPrices = await withTimeout(
+        fillMissingPrices(capped, MAX_PRICE_FALLBACK_RESULTS),
+        PRICE_FALLBACK_TIMEOUT_MS,
+      );
+      for (const [id, { price, currency }] of extractedPrices) {
+        const result = capped.find((r) => r.id === id);
+        if (result) {
+          result.price = price;
+          result.currency = currency;
+        }
+      }
+      console.log(`[search:${requestId}] Price fallback filled ${extractedPrices.size} prices`);
+    } catch (err) {
+      console.warn("[search] Price fallback timed out or failed:", err);
+    }
+  } else {
+    console.log("[search] Skipping price fallback — insufficient time remaining");
+  }
 
   // Fetch images for top candidates only
   const imageCandidates = selectImageCandidates(capped, MAX_IMAGES_FOR_RANKING);
