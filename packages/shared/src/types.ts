@@ -150,11 +150,48 @@ export interface SearchResponse {
 // === Cache ===
 
 export interface CachedSearch {
-  productId: string;
   response: SearchResponse;
   cachedAt: number;
-  ttl: number;
 }
+
+// === Extension Display Types ===
+
+/** Minimal product info for UI display across extension contexts */
+export interface ProductDisplayInfo {
+  name: string;
+  price: number | null;
+  currency: string | null;
+  imageUrl?: string;
+  /** Base64 data URL for UI display only — never sent to backend as imageUrl */
+  displayImageDataUrl?: string;
+  marketplace?: string;
+}
+
+/** Flexible product context for chat — accepts both DetectedProduct and ProductDisplayInfo shapes */
+export interface ChatProductContext {
+  title?: string | null;
+  name?: string | null;
+  price: number | null;
+  currency: string | null;
+  marketplace?: string | null;
+  imageUrl?: string | null;
+}
+
+/** Service Worker → Side Panel messages */
+export type BackgroundToSidePanelMessage =
+  | { target: "sidepanel"; type: "identifying" }
+  | { target: "sidepanel"; type: "product_selection"; products: IdentifiedProduct[]; screenshotDataUrl: string; pageUrl: string; tabId: number }
+  | { target: "sidepanel"; type: "searching"; product: ProductDisplayInfo }
+  | { target: "sidepanel"; type: "results"; product: ProductDisplayInfo; response: SearchResponse }
+  | { target: "sidepanel"; type: "error"; product: ProductDisplayInfo | null; message: string }
+  | { target: "sidepanel"; type: "chat_response"; reply: string }
+  | { target: "sidepanel"; type: "chat_error"; error: string };
+
+/** Side Panel → Service Worker messages */
+export type SidePanelToBackgroundMessage =
+  | { type: "select_product"; tabId: number; product: IdentifiedProduct; screenshotDataUrl: string; pageUrl: string }
+  | { type: "GET_STATE" }
+  | { type: "CHAT_REQUEST"; request: ChatRequest; tabId?: number };
 
 // === Chat ===
 
@@ -165,7 +202,7 @@ export interface ChatMessage {
   inputMode: "text" | "voice";
   timestamp: number;
   context: {
-    currentProduct: DetectedProduct | null;
+    currentProduct: ChatProductContext | null;
     searchResults: RankedResult[] | null;
   } | null;
 }
@@ -175,7 +212,7 @@ export interface ChatMessage {
 export interface ChatRequest {
   message: string;
   context: {
-    product: DetectedProduct | null;
+    product: ChatProductContext | null;
     results: RankedResult[] | null;
   };
   history: ChatMessage[];

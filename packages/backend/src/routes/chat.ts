@@ -3,7 +3,7 @@ import type {
   ChatRequest,
   ChatResponse,
   ChatMessage,
-  DetectedProduct,
+  ChatProductContext,
   RankedResult,
 } from "@shopping-assistant/shared";
 import { CHAT_TIMEOUT_MS, MAX_CHAT_HISTORY } from "@shopping-assistant/shared";
@@ -79,14 +79,14 @@ chatRoute.post("/", async (c) => {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function buildContextBlock(
-  product: DetectedProduct | null,
+  product: ChatProductContext | null,
   results: RankedResult[] | null,
 ): string {
   const parts: string[] = [];
 
   if (product) {
     parts.push("[Current Product]");
-    parts.push(`Title: ${product.title ?? "Unknown"}`);
+    parts.push(`Title: ${product.title ?? product.name ?? "Unknown"}`);
     if (product.price !== null) {
       parts.push(`Price: ${product.currency ?? "$"}${product.price}`);
     }

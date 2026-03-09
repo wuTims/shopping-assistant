@@ -1,7 +1,10 @@
 import type {
   IdentifyResponse,
+  IdentifiedProduct,
   SearchRequest,
   SearchResponse,
+  ProductDisplayInfo,
+  ChatRequest,
 } from "@shopping-assistant/shared";
 import { CACHE_TTL_MS, CACHE_MAX_ENTRIES } from "@shopping-assistant/shared";
 
@@ -9,22 +12,33 @@ const BACKEND_URL = "http://localhost:8080";
 
 console.log("[Shopping Assistant] Service worker started");
 
+// Per-tab state snapshots for GET_STATE (only view-level messages, not transient chat events)
+const tabState = new Map<number, Record<string, unknown>>();
+let activeTabId: number | null = null;
+
+/** Message types that represent a view state worth restoring on panel reopen */
+const VIEW_STATE_TYPES = new Set([
+  "identifying",
+  "product_selection",
+  "searching",
+  "results",
+  "error",
+]);
+
 // Open side panel and trigger screenshot on extension icon click
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab.id) return;
+  activeTabId = tab.id;
 
-  // Open side panel first
   await chrome.sidePanel.open({ tabId: tab.id });
 
   try {
     notifySidePanel(tab.id, { type: "identifying" });
 
-    // Capture visible tab screenshot
     const screenshotDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
       format: "png",
     });
 
-    // Send to backend for product identification
     const identifyRes = await fetch(`${BACKEND_URL}/identify`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -37,6 +51,7 @@ chrome.action.onClicked.addListener(async (tab) => {
     if (!identifyRes.ok) {
       notifySidePanel(tab.id, {
         type: "error",
+        product: null,
         message: "Failed to identify products on this page.",
       });
       return;
@@ -47,23 +62,24 @@ chrome.action.onClicked.addListener(async (tab) => {
     if (identified.products.length === 0) {
       notifySidePanel(tab.id, {
         type: "error",
+        product: null,
         message: "No products found on this page.",
       });
       return;
     }
 
     if (identified.products.length === 1 || identified.pageType === "product_detail") {
-      // Auto-select the single/main product
       const product = identified.products[0];
-      notifySidePanel(tab.id, { type: "searching", product });
-      await searchForProduct(tab.id, product, screenshotDataUrl, tab.url ?? "");
+      const displayProduct = identifiedToDisplay(product);
+      notifySidePanel(tab.id, { type: "searching", product: displayProduct });
+      await searchForProduct(tab.id, displayProduct, screenshotDataUrl, tab.url ?? "");
     } else {
-      // Multiple products — let user pick
       notifySidePanel(tab.id, {
         type: "product_selection",
         products: identified.products,
         screenshotDataUrl,
         pageUrl: tab.url ?? "",
+        tabId: tab.id,
       });
     }
   } catch (err) {
@@ -71,19 +87,29 @@ chrome.action.onClicked.addListener(async (tab) => {
     if (tab.id) {
       notifySidePanel(tab.id, {
         type: "error",
+        product: null,
         message: "Something went wrong. Please try again.",
       });
     }
   }
 });
 
-// Listen for product selection from side panel AND image clicks from content script
+// Listen for messages from side panel and content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "GET_STATE") {
+    const tabId = message.tabId ?? activeTabId;
+    sendResponse(tabId ? tabState.get(tabId) ?? null : null);
+    return false;
+  }
+
   if (message.type === "select_product") {
     const { product, screenshotDataUrl, pageUrl } = message;
     const effectiveTabId = message.tabId ?? sender.tab?.id;
     if (!effectiveTabId) return false;
-    searchForProduct(effectiveTabId, product, screenshotDataUrl, pageUrl).then(() =>
+    activeTabId = effectiveTabId;
+    const displayProduct = identifiedToDisplay(product);
+    notifySidePanel(effectiveTabId, { type: "searching", product: displayProduct });
+    searchForProduct(effectiveTabId, displayProduct, screenshotDataUrl, pageUrl).then(() =>
       sendResponse({ status: "ok" }),
     );
     return true;
@@ -92,18 +118,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "IMAGE_CLICKED") {
     const tabId = sender.tab?.id;
     if (!tabId) return false;
+    activeTabId = tabId;
 
     const { imageUrl, titleHint, pageUrl } = message;
 
     (async () => {
       await chrome.sidePanel.open({ tabId });
 
-      const product = {
+      const product: ProductDisplayInfo = {
         name: titleHint || "Product",
-        price: null as number | null,
-        currency: null as string | null,
+        price: null,
+        currency: null,
+        imageUrl,
       };
 
+      notifySidePanel(tabId, { type: "searching", product });
       await searchForProduct(tabId, product, "", pageUrl, imageUrl);
       sendResponse({ status: "ok" });
     })();
@@ -111,39 +140,88 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === "CHAT_REQUEST") {
+    const { request, tabId: chatTabId } = message as { request: ChatRequest; tabId?: number };
+    const replyTabId = chatTabId ?? sender.tab?.id ?? activeTabId;
+    (async () => {
+      try {
+        const res = await fetch(`${BACKEND_URL}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+        });
+        if (!res.ok) throw new Error("Chat request failed");
+        const data = await res.json();
+        if (replyTabId) {
+          notifySidePanel(replyTabId, { type: "chat_response", reply: data.reply });
+        }
+      } catch {
+        if (replyTabId) {
+          notifySidePanel(replyTabId, { type: "chat_error", error: "Chat failed" });
+        }
+      }
+      sendResponse({ status: "ok" });
+    })();
+    return true;
+  }
+
   return false;
 });
 
+function identifiedToDisplay(product: IdentifiedProduct): ProductDisplayInfo {
+  return {
+    name: product.name,
+    price: product.price,
+    currency: product.currency,
+    // imageRegion is raw base64 — store as displayImageDataUrl for UI only.
+    // Do NOT put it in imageUrl, which the backend expects to be HTTP/S.
+    displayImageDataUrl: product.imageRegion
+      ? `data:image/png;base64,${product.imageRegion}`
+      : undefined,
+  };
+}
+
+async function computeImageHash(input: string): Promise<string> {
+  const encoded = new TextEncoder().encode(input);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 async function searchForProduct(
   tabId: number,
-  product: { name: string; price: number | null; currency: string | null },
+  product: ProductDisplayInfo,
   screenshotDataUrl: string,
   pageUrl: string,
   imageUrl?: string,
 ): Promise<void> {
-  // Check cache first
-  const cacheKey = `search:${product.name}:${pageUrl}`;
+  const imageInput = imageUrl || screenshotDataUrl;
+  const imageHash = imageInput ? await computeImageHash(imageInput) : "";
+  const cacheKey = `search:${product.name}:${pageUrl}:${imageHash}`;
   const cached = await getCached(cacheKey);
   if (cached) {
-    notifySidePanel(tabId, { type: "results", response: cached });
+    const enriched = enrichProduct(product, cached);
+    notifySidePanel(tabId, { type: "results", product: enriched, response: cached });
     return;
   }
 
   try {
+    // Prefer cropped product image (displayImageDataUrl) over full screenshot for imageBase64
+    const croppedBase64 = product.displayImageDataUrl?.split(",")[1];
     const searchReq: SearchRequest = {
-      imageUrl: imageUrl || null,
-      imageBase64: !imageUrl && screenshotDataUrl
-        ? (screenshotDataUrl.includes(",")
-          ? screenshotDataUrl.split(",")[1]
-          : screenshotDataUrl)
+      imageUrl: imageUrl ?? product.imageUrl ?? null,
+      imageBase64: !imageUrl
+        ? (croppedBase64 ?? (screenshotDataUrl
+          ? (screenshotDataUrl.includes(",")
+            ? screenshotDataUrl.split(",")[1]
+            : screenshotDataUrl)
+          : null))
         : null,
       title: product.name !== "Product" ? product.name : null,
       price: product.price,
       currency: product.currency,
       sourceUrl: pageUrl,
     };
-
-    notifySidePanel(tabId, { type: "searching", product });
 
     const searchRes = await fetch(`${BACKEND_URL}/search`, {
       method: "POST",
@@ -154,6 +232,7 @@ async function searchForProduct(
     if (!searchRes.ok) {
       notifySidePanel(tabId, {
         type: "error",
+        product,
         message: "Search failed. Please try again.",
       });
       return;
@@ -161,18 +240,33 @@ async function searchForProduct(
 
     const response: SearchResponse = await searchRes.json();
     await setCache(cacheKey, response);
-    notifySidePanel(tabId, { type: "results", response });
+    const enriched = enrichProduct(product, response);
+    notifySidePanel(tabId, { type: "results", product: enriched, response });
   } catch (err) {
     console.error("[Shopping Assistant] Search failed:", err);
     notifySidePanel(tabId, {
       type: "error",
+      product,
       message: "Search failed. Please try again.",
     });
   }
 }
 
+function enrichProduct(product: ProductDisplayInfo, response: SearchResponse): ProductDisplayInfo {
+  return {
+    ...product,
+    name: response.originalProduct.title ?? product.name,
+    imageUrl: product.imageUrl || response.originalProduct.imageUrl || undefined,
+  };
+}
+
 function notifySidePanel(tabId: number, message: Record<string, unknown>): void {
-  chrome.runtime.sendMessage({ target: "sidepanel", tabId, ...message }).catch(() => {
+  const full = { target: "sidepanel", tabId, ...message };
+  // Only persist view-level state, not transient chat events
+  if (VIEW_STATE_TYPES.has(message.type as string)) {
+    tabState.set(tabId, full);
+  }
+  chrome.runtime.sendMessage(full).catch(() => {
     // Side panel may not be ready yet
   });
 }
@@ -189,7 +283,6 @@ async function getCached(key: string): Promise<SearchResponse | null> {
 }
 
 async function setCache(key: string, response: SearchResponse): Promise<void> {
-  // LRU eviction
   const all = await chrome.storage.local.get(null);
   const searchKeys = Object.keys(all).filter((k) => k.startsWith("search:"));
   if (searchKeys.length >= CACHE_MAX_ENTRIES) {
