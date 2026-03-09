@@ -72,7 +72,13 @@ searchRoute.post("/", async (c) => {
   let identification: ProductIdentification;
   let originalImage: FetchedImage;
 
-  if (body.identification) {
+  if (
+    body.identification &&
+    typeof body.identification.category === "string" &&
+    typeof body.identification.description === "string" &&
+    Array.isArray(body.identification.searchQueries) &&
+    body.identification.searchQueries.length > 0
+  ) {
     // Use pre-computed identification from /identify — skip redundant Gemini call
     identification = body.identification;
     originalImage = typeof imageSource === "string"
@@ -81,20 +87,16 @@ searchRoute.post("/", async (c) => {
     console.log(`[search:${requestId}] Using provided identification: ${identification.category} — ${identification.description}`);
   } else {
     // No identification provided — identify from scratch (overlay click path)
-    const identifyResult = await Promise.resolve(identifyProduct(imageSource, body.title)).then(
-      (v) => ({ status: "fulfilled" as const, value: v }),
-      (e) => ({ status: "rejected" as const, reason: e }),
-    );
-
-    if (identifyResult.status === "rejected") {
-      console.error(`[search:${requestId}] Product identification failed:`, identifyResult.reason);
-      const message = identifyResult.reason instanceof Error ? identifyResult.reason.message : "Unknown error";
+    try {
+      const result = await identifyProduct(imageSource, body.title);
+      identification = result.identification;
+      originalImage = result.originalImage;
+      console.log(`[search:${requestId}] Identified: ${identification.category} — ${identification.description}`);
+    } catch (err) {
+      console.error(`[search:${requestId}] Product identification failed:`, err);
+      const message = err instanceof Error ? err.message : "Unknown error";
       return c.json({ error: "product_identification_failed", message, requestId }, 422);
     }
-
-    identification = identifyResult.value.identification;
-    originalImage = identifyResult.value.originalImage;
-    console.log(`[search:${requestId}] Identified: ${identification.category} — ${identification.description}`);
   }
 
   const titleBraveResult = await titleBravePromise.then(
