@@ -42,8 +42,8 @@ identify.post("/", async (c) => {
               // Clamp bounding box to image dimensions
               const x = Math.max(0, Math.round(p.boundingBox.x));
               const y = Math.max(0, Math.round(p.boundingBox.y));
-              const w = Math.min(Math.round(p.boundingBox.width), imgWidth - x);
-              const h = Math.min(Math.round(p.boundingBox.height), imgHeight - y);
+              const w = Math.max(0, Math.min(Math.round(p.boundingBox.width), imgWidth - x));
+              const h = Math.max(0, Math.min(Math.round(p.boundingBox.height), imgHeight - y));
 
               if (w > 10 && h > 10) {
                 const cropped = await sharp(screenshotBuffer)
