@@ -89,6 +89,8 @@ searchRoute.post("/", async (c) => {
       console.log(`[search:${requestId}] Identified: ${identification.category} — ${identification.description}`);
     } catch (err) {
       console.error(`[search:${requestId}] Product identification failed:`, err);
+      // Suppress the dangling Brave promise so it doesn't consume quota for a failed request
+      titleBravePromise.catch(() => {});
       const message = err instanceof Error ? err.message : "Unknown error";
       return c.json({ error: "product_identification_failed", message, requestId }, 422);
     }
@@ -203,6 +205,8 @@ searchRoute.post("/", async (c) => {
   const rankStart = Date.now();
   const scores = buildFallbackScores(capped, identification);
   const rankingDurationMs = Date.now() - rankStart;
+  // Heuristic scoring is the sole ranking path (AI ranking removed in 362f16e).
+  // "ok" means ranking completed successfully — the heuristic is the baseline.
   const rankingStatus: "ok" | "fallback" = "ok";
   const rankingFailureReason: string | null = null;
 

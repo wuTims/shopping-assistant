@@ -79,10 +79,11 @@ export async function searchProducts(queries: string[]): Promise<ProviderSearchO
           }
         }
 
-        // Only add the web result itself if it has product data or is from a known shopping domain.
-        // This filters out review articles, news posts, and forum links that would yield bad price data.
+        // Add the web result itself only if it's from a shopping domain and NOT already
+        // represented by product_cluster entries (which have structured prices and direct URLs).
+        // The parent URL for clustered results is typically a search/category page with no price.
         const isShoppingSite = isShoppingDomain(item.url);
-        if (item.product_cluster?.length || isShoppingSite) {
+        if (!item.product_cluster?.length && isShoppingSite) {
           const parsed = parsePriceFromSnippets(item);
           queryResults.push({
             id: `brave_${idCounter++}`,
