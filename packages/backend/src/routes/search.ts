@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { SearchRequest, SearchResponse, SearchResult } from "@shopping-assistant/shared";
+import type { SearchRequest, SearchResponse, SearchResult, ProductIdentification } from "@shopping-assistant/shared";
 import {
   SEARCH_TIMEOUT_MS,
   MAX_RESULTS_FOR_RANKING,
@@ -64,22 +64,43 @@ searchRoute.post("/", async (c) => {
 
   const titleQueries = buildTitleQueries(body.title, body.sourceUrl);
 
-  const [identifyResult, titleBraveResult] = await Promise.allSettled([
-    identifyProduct(imageSource, body.title),
-    titleQueries.length > 0
-      ? withTimeout(searchProducts(titleQueries), Math.max(remaining() - 1000, 5000))
-      : Promise.resolve(emptyProviderOutcome()),
-  ]);
+  // Always kick off title Brave search in parallel
+  const titleBravePromise = titleQueries.length > 0
+    ? withTimeout(searchProducts(titleQueries), Math.max(remaining() - 1000, 5000))
+    : Promise.resolve(emptyProviderOutcome());
 
-  // Identification is required
-  if (identifyResult.status === "rejected") {
-    console.error(`[search:${requestId}] Product identification failed:`, identifyResult.reason);
-    const message = identifyResult.reason instanceof Error ? identifyResult.reason.message : "Unknown error";
-    return c.json({ error: "product_identification_failed", message, requestId }, 422);
+  let identification: ProductIdentification;
+  let originalImage: FetchedImage;
+
+  if (body.identification) {
+    // Use pre-computed identification from /identify — skip redundant Gemini call
+    identification = body.identification;
+    originalImage = typeof imageSource === "string"
+      ? await fetchImage(imageSource)
+      : imageSource;
+    console.log(`[search:${requestId}] Using provided identification: ${identification.category} — ${identification.description}`);
+  } else {
+    // No identification provided — identify from scratch (overlay click path)
+    const identifyResult = await Promise.resolve(identifyProduct(imageSource, body.title)).then(
+      (v) => ({ status: "fulfilled" as const, value: v }),
+      (e) => ({ status: "rejected" as const, reason: e }),
+    );
+
+    if (identifyResult.status === "rejected") {
+      console.error(`[search:${requestId}] Product identification failed:`, identifyResult.reason);
+      const message = identifyResult.reason instanceof Error ? identifyResult.reason.message : "Unknown error";
+      return c.json({ error: "product_identification_failed", message, requestId }, 422);
+    }
+
+    identification = identifyResult.value.identification;
+    originalImage = identifyResult.value.originalImage;
+    console.log(`[search:${requestId}] Identified: ${identification.category} — ${identification.description}`);
   }
 
-  const { identification, originalImage } = identifyResult.value;
-  console.log(`[search:${requestId}] Identified: ${identification.category} — ${identification.description}`);
+  const titleBraveResult = await titleBravePromise.then(
+    (v) => ({ status: "fulfilled" as const, value: v }),
+    (e) => ({ status: "rejected" as const, reason: e }),
+  );
 
   const titleBraveOutcome = titleBraveResult.status === "fulfilled"
     ? titleBraveResult.value
