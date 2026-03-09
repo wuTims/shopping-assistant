@@ -30,10 +30,12 @@ function createOverlayIcon(img: HTMLImageElement): HTMLDivElement {
     justifyContent: "center",
     transition: "transform 0.15s ease, box-shadow 0.15s ease",
     pointerEvents: "auto",
-    // Invisible hit area: extend hover zone 12px in all directions
+    // Invisible hit area: extend hover zone 12px in all directions.
+    // backgroundClip prevents the white background from filling the padding zone.
     padding: "12px",
     margin: "-12px",
     boxSizing: "content-box",
+    backgroundClip: "content-box",
   });
 
   const icon = document.createElement("span");

@@ -99,6 +99,7 @@ searchRoute.post("/", async (c) => {
   // Check if request was aborted during Phase 1
   if (abortController.signal.aborted) {
     console.warn(`[search:${requestId}] Aborted after Phase 1 (${Date.now() - searchStart}ms)`);
+    titleBravePromise.catch(() => {});
     return c.json({ error: "timeout", message: "Search request timed out", requestId }, 504);
   }
 
