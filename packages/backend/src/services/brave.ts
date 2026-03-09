@@ -1,5 +1,5 @@
 import type { SearchResult } from "@shopping-assistant/shared";
-import { extractMarketplace } from "../utils/marketplace.js";
+import { extractMarketplace, isKnownMarketplaceDomain } from "../utils/marketplace.js";
 import { isLikelyTimeoutError } from "../utils/errors.js";
 import type { ProviderSearchOutcome } from "./provider-outcome.js";
 import { resolveProviderStatus } from "./provider-outcome.js";
@@ -10,18 +10,7 @@ const PER_QUERY_TIMEOUT_MS = 8_000;
 
 /** Check if a URL belongs to a known shopping marketplace using the shared domain list. */
 function isShoppingDomain(url: string): boolean {
-  const name = extractMarketplace(url);
-  // extractMarketplace returns a capitalized hostname fallback for unknown sites
-  // Known marketplaces return a curated display name (e.g. "Amazon", "eBay")
-  // We check that the result is a known name, not just a hostname fallback
-  try {
-    const hostname = new URL(url).hostname.replace(/^www\./, "");
-    const parts = hostname.split(".");
-    const fallback = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
-    return name !== "Unknown" && name !== fallback;
-  } catch {
-    return false;
-  }
+  return isKnownMarketplaceDomain(url);
 }
 
 interface BraveWebResult {

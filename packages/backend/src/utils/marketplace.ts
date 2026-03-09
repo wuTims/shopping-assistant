@@ -30,6 +30,20 @@ const MARKETPLACE_NAMES: Record<string, string> = {
   "kohls.com": "Kohl's",
 };
 
+/** Check if a URL belongs to a known shopping marketplace. */
+export function isKnownMarketplaceDomain(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "");
+    if (hostname in MARKETPLACE_NAMES) return true;
+    for (const domain of Object.keys(MARKETPLACE_NAMES)) {
+      if (hostname.endsWith(`.${domain}`)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Extract a human-readable marketplace name from a URL.
  * Falls back to the hostname if no known marketplace matches.
