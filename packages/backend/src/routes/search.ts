@@ -1,18 +1,13 @@
 import { Hono } from "hono";
-import type { SearchRequest, SearchResponse, SearchResult, ProductIdentification } from "@shopping-assistant/shared";
+import type { SearchRequest, SearchResponse, ProductIdentification } from "@shopping-assistant/shared";
 import {
   SEARCH_TIMEOUT_MS,
   MAX_RESULTS_FOR_RANKING,
-  MAX_IMAGES_FOR_RANKING,
-  RANKING_IMAGE_TIMEOUT_MS,
   MAX_PRICE_FALLBACK_RESULTS,
   PRICE_FALLBACK_TIMEOUT_MS,
 } from "@shopping-assistant/shared";
 import {
   identifyProduct,
-  rankResults,
-  fetchImage,
-  RankingOutputValidationError,
 } from "../services/gemini.js";
 import type { FetchedImage } from "../services/gemini.js";
 import { searchProducts } from "../services/brave.js";
@@ -24,7 +19,6 @@ import {
   applyRanking,
   buildFallbackScores,
   heuristicPreSort,
-  selectImageCandidates,
 } from "../services/ranking.js";
 
 export const searchRoute = new Hono();
@@ -70,7 +64,6 @@ searchRoute.post("/", async (c) => {
     : Promise.resolve(emptyProviderOutcome());
 
   let identification: ProductIdentification;
-  let originalImage: FetchedImage;
 
   if (
     body.identification &&
@@ -81,16 +74,12 @@ searchRoute.post("/", async (c) => {
   ) {
     // Use pre-computed identification from /identify — skip redundant Gemini call
     identification = body.identification;
-    originalImage = typeof imageSource === "string"
-      ? await fetchImage(imageSource)
-      : imageSource;
     console.log(`[search:${requestId}] Using provided identification: ${identification.category} — ${identification.description}`);
   } else {
     // No identification provided — identify from scratch (overlay click path)
     try {
       const result = await identifyProduct(imageSource, body.title);
       identification = result.identification;
-      originalImage = result.originalImage;
       console.log(`[search:${requestId}] Identified: ${identification.category} — ${identification.description}`);
     } catch (err) {
       console.error(`[search:${requestId}] Product identification failed:`, err);
@@ -155,7 +144,7 @@ searchRoute.post("/", async (c) => {
     marketplaceBraveOutcome,
   );
 
-  // ── Phase 3: merge → dedup → heuristicPreSort → cap → fetch images ───────
+  // ── Phase 3: merge → dedup → heuristicPreSort → cap ────────────────────
 
   const allResults = [...braveOutcome.results];
   const deduped = mergeAndDedup(allResults);
@@ -186,53 +175,13 @@ searchRoute.post("/", async (c) => {
     console.log("[search] Skipping price fallback — insufficient time remaining");
   }
 
-  // Fetch images for top candidates only
-  const imageCandidates = selectImageCandidates(capped, MAX_IMAGES_FOR_RANKING);
-  const resultImages = new Map<string, FetchedImage>();
-
-  const imageResults = await Promise.allSettled(
-    imageCandidates.map(async (r) => {
-      const img = await fetchImage(r.imageUrl!, RANKING_IMAGE_TIMEOUT_MS);
-      return { id: r.id, image: img };
-    }),
-  );
-  for (const result of imageResults) {
-    if (result.status === "fulfilled") {
-      resultImages.set(result.value.id, result.value.image);
-    }
-  }
-
-  console.log(`[search:${requestId}] Fetched ${resultImages.size}/${imageCandidates.length} result images`);
-
-  // ── Phase 4: AI ranking (with deadline fallback) ──────────────────────────
+  // ── Phase 4: ranking ─────────────────────────────────────────────────────
 
   const rankStart = Date.now();
-  let scores: Record<string, number> = {};
-  let rankingStatus: "ok" | "fallback" = "ok";
-  let rankingFailureReason: string | null = null;
-
-  if (remaining() < 2000) {
-    // Not enough time for AI ranking — use heuristic fallback
-    rankingStatus = "fallback";
-    rankingFailureReason = "Insufficient time for AI ranking";
-    console.log(`[search:${requestId}] Skipping AI ranking (${remaining()}ms left), using fallback`);
-    scores = buildFallbackScores(capped, identification);
-  } else {
-    try {
-      scores = await rankResults({
-        originalImage,
-        results: capped,
-        resultImages,
-        identification,
-      });
-    } catch (err) {
-      rankingStatus = "fallback";
-      rankingFailureReason = getRankingFailureReason(err);
-      console.error(`[search:${requestId}] Ranking failed (${rankingFailureReason}), using heuristic fallback:`, err);
-      scores = buildFallbackScores(capped, identification);
-    }
-  }
+  const scores = buildFallbackScores(capped, identification);
   const rankingDurationMs = Date.now() - rankStart;
+  const rankingStatus: "ok" | "fallback" = "ok";
+  const rankingFailureReason: string | null = null;
 
   const ranked = applyRanking(capped, scores, body.price);
 
@@ -365,17 +314,3 @@ function rejectedProviderOutcome(totalQueries: number, err: unknown): ProviderSe
   };
 }
 
-function getRankingFailureReason(err: unknown): string {
-  if (err instanceof RankingOutputValidationError) {
-    if (err.details.length > 0) {
-      return `${err.message} (${err.details.join("; ")})`;
-    }
-    return err.message;
-  }
-
-  if (err instanceof Error) {
-    return err.message;
-  }
-
-  return "Unknown ranking error";
-}
