@@ -193,6 +193,11 @@ searchRoute.post("/", async (c) => {
     console.log("[search] Skipping price fallback — insufficient time remaining");
   }
 
+  if (abortController.signal.aborted) {
+    console.warn(`[search:${requestId}] Aborted after price fallback (${Date.now() - searchStart}ms)`);
+    return c.json({ error: "timeout", message: "Search request timed out", requestId }, 504);
+  }
+
   // ── Phase 4: ranking ─────────────────────────────────────────────────────
 
   const rankStart = Date.now();
