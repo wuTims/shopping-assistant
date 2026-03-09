@@ -8,6 +8,26 @@ const BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search";
 const BRAVE_API_KEY = process.env.BRAVE_API_KEY!;
 const PER_QUERY_TIMEOUT_MS = 8_000;
 
+const SHOPPING_DOMAINS = new Set([
+  "amazon.com", "amazon.co.uk", "amazon.de", "amazon.co.jp",
+  "ebay.com", "ebay.co.uk",
+  "walmart.com", "target.com", "bestbuy.com", "newegg.com",
+  "aliexpress.com", "dhgate.com", "temu.com", "1688.com",
+  "etsy.com", "costco.com", "bhphotovideo.com",
+  "homedepot.com", "lowes.com", "wayfair.com",
+  "zappos.com", "nordstrom.com", "macys.com",
+]);
+
+function isKnownMarketplace(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "");
+    return SHOPPING_DOMAINS.has(hostname) ||
+      [...SHOPPING_DOMAINS].some((d) => hostname.endsWith(`.${d}`));
+  } catch {
+    return false;
+  }
+}
+
 interface BraveWebResult {
   title: string;
   url: string;
@@ -74,20 +94,25 @@ export async function searchProducts(queries: string[]): Promise<ProviderSearchO
           }
         }
 
-        const parsed = parsePriceFromSnippets(item);
-        queryResults.push({
-          id: `brave_${idCounter++}`,
-          source: "brave",
-          title: item.title,
-          price: parsed.price,
-          currency: parsed.currency,
-          imageUrl: item.thumbnail?.src ?? null,
-          productUrl: item.url,
-          marketplace: extractMarketplace(item.url),
-          snippet: item.description ?? item.extra_snippets?.[0] ?? null,
-          structuredData: null,
-          raw: { braveWebResult: item },
-        });
+        // Only add the web result itself if it has product data or is from a known shopping domain.
+        // This filters out review articles, news posts, and forum links that would yield bad price data.
+        const isShoppingSite = isKnownMarketplace(item.url);
+        if (item.product_cluster?.length || isShoppingSite) {
+          const parsed = parsePriceFromSnippets(item);
+          queryResults.push({
+            id: `brave_${idCounter++}`,
+            source: "brave",
+            title: item.title,
+            price: parsed.price,
+            currency: parsed.currency,
+            imageUrl: item.thumbnail?.src ?? null,
+            productUrl: item.url,
+            marketplace: extractMarketplace(item.url),
+            snippet: item.description ?? item.extra_snippets?.[0] ?? null,
+            structuredData: null,
+            raw: { braveWebResult: item },
+          });
+        }
       }
 
       return queryResults;
