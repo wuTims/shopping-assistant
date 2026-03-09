@@ -50,6 +50,12 @@ searchRoute.post("/", async (c) => {
 
   console.log(`[search:${requestId}] Request for: ${body.title ?? body.imageUrl ?? "(base64 image)"}`);
 
+  // Hard request-level timeout — safety net to prevent unbounded latency
+  const abortController = new AbortController();
+  const requestTimer = setTimeout(() => abortController.abort(), SEARCH_TIMEOUT_MS);
+
+  try {
+
   // ── Phase 1: identify product + brave(title queries) in parallel ──────────
 
   const imageSource = body.imageUrl
@@ -86,6 +92,12 @@ searchRoute.post("/", async (c) => {
       const message = err instanceof Error ? err.message : "Unknown error";
       return c.json({ error: "product_identification_failed", message, requestId }, 422);
     }
+  }
+
+  // Check if request was aborted during Phase 1
+  if (abortController.signal.aborted) {
+    console.warn(`[search:${requestId}] Aborted after Phase 1 (${Date.now() - searchStart}ms)`);
+    return c.json({ error: "timeout", message: "Search request timed out", requestId }, 504);
   }
 
   const titleBraveResult = await titleBravePromise.then(
@@ -143,6 +155,12 @@ searchRoute.post("/", async (c) => {
     combineBraveOutcomes(titleBraveOutcome, aiBraveOutcome),
     marketplaceBraveOutcome,
   );
+
+  // Check if request was aborted during Phase 2
+  if (abortController.signal.aborted) {
+    console.warn(`[search:${requestId}] Aborted after Phase 2 (${Date.now() - searchStart}ms)`);
+    return c.json({ error: "timeout", message: "Search request timed out", requestId }, 504);
+  }
 
   // ── Phase 3: merge → dedup → heuristicPreSort → cap ────────────────────
 
@@ -228,6 +246,10 @@ searchRoute.post("/", async (c) => {
 
   console.log(`[search:${requestId}] Complete: ${ranked.length} results in ${response.searchMeta.searchDurationMs}ms`);
   return c.json(response);
+
+  } finally {
+    clearTimeout(requestTimer);
+  }
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
