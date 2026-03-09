@@ -12,6 +12,7 @@ const BOUND_ATTR = "data-shopping-assistant-bound";
 const OVERLAY_ATTR = "data-shopping-assistant-overlay";
 
 function createOverlayIcon(img: HTMLImageElement): HTMLDivElement {
+  // Outer element: transparent hit area (28 + 24 padding = 52px clickable zone)
   const el = document.createElement("div");
   el.setAttribute(OVERLAY_ATTR, "");
 
@@ -19,40 +20,49 @@ function createOverlayIcon(img: HTMLImageElement): HTMLDivElement {
     position: "absolute",
     width: `${OVERLAY_ICON_SIZE_PX}px`,
     height: `${OVERLAY_ICON_SIZE_PX}px`,
-    borderRadius: "50%",
-    background: "rgba(255, 255, 255, 0.92)",
-    border: "1px solid #e5e7eb",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+    padding: "12px",
+    margin: "-12px",
+    boxSizing: "content-box",
     cursor: "pointer",
     zIndex: "999999",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    transition: "transform 0.15s ease, box-shadow 0.15s ease",
     pointerEvents: "auto",
-    // Invisible hit area: extend hover zone 12px in all directions.
-    // backgroundClip prevents the white background from filling the padding zone.
-    padding: "12px",
-    margin: "-12px",
-    boxSizing: "content-box",
-    backgroundClip: "content-box",
+  });
+
+  // Inner element: visible 28px circle with border and shadow
+  const circle = document.createElement("div");
+  Object.assign(circle.style, {
+    width: "100%",
+    height: "100%",
+    borderRadius: "50%",
+    background: "rgba(255, 255, 255, 0.92)",
+    border: "1px solid #e5e7eb",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    transition: "transform 0.15s ease, box-shadow 0.15s ease",
+    pointerEvents: "none",
   });
 
   const icon = document.createElement("span");
   icon.textContent = "\u{1F50D}";
   icon.style.fontSize = "14px";
   icon.style.lineHeight = "1";
-  el.appendChild(icon);
+  circle.appendChild(icon);
+  el.appendChild(circle);
 
   el.addEventListener("mouseenter", () => {
-    el.style.transform = `scale(${OVERLAY_HOVER_SCALE})`;
-    el.style.boxShadow = "0 4px 12px rgba(0,0,0,0.2)";
+    circle.style.transform = `scale(${OVERLAY_HOVER_SCALE})`;
+    circle.style.boxShadow = "0 4px 12px rgba(0,0,0,0.2)";
     el.title = "Find cheaper alternatives";
   });
 
   el.addEventListener("mouseleave", () => {
-    el.style.transform = "scale(1)";
-    el.style.boxShadow = "0 2px 8px rgba(0,0,0,0.15)";
+    circle.style.transform = "scale(1)";
+    circle.style.boxShadow = "0 2px 8px rgba(0,0,0,0.15)";
   });
 
   el.addEventListener("click", (e) => {
