@@ -10,7 +10,6 @@ import {
 } from "@shopping-assistant/shared";
 import {
   identifyProduct,
-  groundedSearch,
   rankResults,
   fetchImage,
   RankingOutputValidationError,
@@ -90,7 +89,9 @@ searchRoute.post("/", async (c) => {
     console.error(`[search:${requestId}] Brave (title) failed:`, titleBraveResult.reason);
   }
 
-  // ── Phase 2: parallel search — grounding + brave(AI) + brave(marketplace) ──
+  // ── Phase 2: parallel search — brave(AI) + brave(marketplace) ────────────
+  // NOTE: Gemini Grounding was removed — 100% timeout rate, 0 results returned.
+  // Grounding fields kept in response for backward compatibility.
 
   const aiQueries = identification.searchQueries;
   const marketplaceQueries = generateMarketplaceQueries(
@@ -100,9 +101,8 @@ searchRoute.post("/", async (c) => {
 
   const skipAiBrave = !hasNewQueries(aiQueries, titleQueries);
 
-  const [groundingResult, aiBraveResult, marketplaceBraveResult] =
+  const [aiBraveResult, marketplaceBraveResult] =
     await Promise.allSettled([
-      withTimeout(groundedSearch(aiQueries), phase2Deadline),
       skipAiBrave
         ? Promise.resolve(emptyProviderOutcome())
         : withTimeout(searchProducts(aiQueries), phase2Deadline),
@@ -111,9 +111,6 @@ searchRoute.post("/", async (c) => {
         : Promise.resolve(emptyProviderOutcome()),
     ]);
 
-  const groundingOutcome = groundingResult.status === "fulfilled"
-    ? groundingResult.value
-    : rejectedProviderOutcome(aiQueries.length, groundingResult.reason);
   const aiBraveOutcome = aiBraveResult.status === "fulfilled"
     ? aiBraveResult.value
     : rejectedProviderOutcome(aiQueries.length, aiBraveResult.reason);
@@ -122,9 +119,6 @@ searchRoute.post("/", async (c) => {
       ? marketplaceBraveResult.value
       : rejectedProviderOutcome(marketplaceQueries.length, marketplaceBraveResult.reason);
 
-  if (groundingResult.status === "rejected") {
-    console.error(`[search:${requestId}] Grounding failed:`, groundingResult.reason);
-  }
   if (aiBraveResult.status === "rejected") {
     console.error(`[search:${requestId}] Brave (AI) failed:`, aiBraveResult.reason);
   }
@@ -140,7 +134,7 @@ searchRoute.post("/", async (c) => {
 
   // ── Phase 3: merge → dedup → heuristicPreSort → cap → fetch images ───────
 
-  const allResults = [...groundingOutcome.results, ...braveOutcome.results];
+  const allResults = [...braveOutcome.results];
   const deduped = mergeAndDedup(allResults);
   const preSorted = heuristicPreSort(deduped, identification, body.price);
   const capped = preSorted.slice(0, MAX_RESULTS_FOR_RANKING);
@@ -234,10 +228,10 @@ searchRoute.post("/", async (c) => {
     searchMeta: {
       totalFound: deduped.length,
       braveResultCount: braveOutcome.results.length,
-      groundingResultCount: groundingOutcome.results.length,
+      groundingResultCount: 0,
       sourceStatus: {
         brave: braveOutcome.status,
-        grounding: groundingOutcome.status,
+        grounding: "ok" as const,
       },
       sourceDiagnostics: {
         brave: {
@@ -247,10 +241,10 @@ searchRoute.post("/", async (c) => {
           timedOutQueries: braveOutcome.timedOutQueries,
         },
         grounding: {
-          totalQueries: groundingOutcome.totalQueries,
-          successfulQueries: groundingOutcome.successfulQueries,
-          failedQueries: groundingOutcome.failedQueries,
-          timedOutQueries: groundingOutcome.timedOutQueries,
+          totalQueries: 0,
+          successfulQueries: 0,
+          failedQueries: 0,
+          timedOutQueries: 0,
         },
       },
       searchDurationMs: Date.now() - searchStart,
