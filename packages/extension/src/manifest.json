@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Find cheaper alternatives for any product you see online.",
   "permissions": ["sidePanel", "storage", "activeTab"],
+  "host_permissions": ["http://localhost:8080/*"],
   "background": {
     "service_worker": "src/background/index.ts",
     "type": "module"
@@ -19,7 +20,7 @@
     "default_path": "src/sidepanel/index.html"
   },
   "action": {
-    "default_title": "Shopping Source Discovery"
+    "default_title": "Personal Shopper"
   },
   "icons": {}
 }
