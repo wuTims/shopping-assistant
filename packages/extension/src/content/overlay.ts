@@ -3,6 +3,7 @@ import {
   OVERLAY_ICON_HOVER_SIZE_PX,
   MIN_IMAGE_SIZE_PX,
   OVERLAY_TITLE_HINT_MAX_LENGTH,
+  OVERLAY_HIDE_DELAY_MS,
 } from "@shopping-assistant/shared";
 
 const OVERLAY_HOVER_SCALE = OVERLAY_ICON_HOVER_SIZE_PX / OVERLAY_ICON_SIZE_PX;
@@ -29,6 +30,10 @@ function createOverlayIcon(img: HTMLImageElement): HTMLDivElement {
     justifyContent: "center",
     transition: "transform 0.15s ease, box-shadow 0.15s ease",
     pointerEvents: "auto",
+    // Invisible hit area: extend hover zone 12px in all directions
+    padding: "12px",
+    margin: "-12px",
+    boxSizing: "content-box",
   });
 
   const icon = document.createElement("span");
@@ -113,7 +118,7 @@ function scheduleHide(): void {
   hideTimeout = setTimeout(() => {
     if (!activeOverlay) return;
     hideOverlay();
-  }, 80);
+  }, OVERLAY_HIDE_DELAY_MS);
 }
 
 function hideOverlay(): void {
@@ -135,7 +140,10 @@ function attachOverlay(img: HTMLImageElement): void {
   img.addEventListener("mouseenter", () => showOverlay(img));
   img.addEventListener("mouseleave", (e) => {
     const related = e.relatedTarget as Node | null;
-    if (activeOverlay && related && activeOverlay.el.contains(related)) return;
+    if (activeOverlay && related) {
+      // Don't hide if mouse moved to overlay or its parent container
+      if (activeOverlay.el.contains(related) || activeOverlay.el === related) return;
+    }
     scheduleHide();
   });
 }
