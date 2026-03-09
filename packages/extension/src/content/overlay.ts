@@ -109,8 +109,10 @@ function showOverlay(img: HTMLImageElement): void {
   parent.appendChild(overlay);
   activeOverlay = { el: overlay, img };
 
+  overlay.addEventListener("mouseenter", () => {
+    if (hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null; }
+  });
   overlay.addEventListener("mouseleave", scheduleHide);
-  img.addEventListener("mouseleave", scheduleHide);
 }
 
 function scheduleHide(): void {
