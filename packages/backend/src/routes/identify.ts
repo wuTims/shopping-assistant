@@ -19,6 +19,7 @@ identify.post("/", async (c) => {
     ? body.screenshot.split(",")[1]
     : body.screenshot;
 
+  let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     const response = await Promise.race([
       (async (): Promise<IdentifyResponse> => {
@@ -66,9 +67,9 @@ identify.post("/", async (c) => {
           pageType: result.pageType,
         };
       })(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("Identify timed out")), IDENTIFY_TIMEOUT_MS),
-      ),
+      new Promise<never>((_, reject) => {
+        deadlineTimer = setTimeout(() => reject(new Error("Identify timed out")), IDENTIFY_TIMEOUT_MS);
+      }),
     ]);
 
     console.log(
@@ -79,6 +80,8 @@ identify.post("/", async (c) => {
   } catch (err) {
     console.error("[identify] Failed:", err);
     return c.json({ error: "Failed to identify products" }, 500);
+  } finally {
+    clearTimeout(deadlineTimer);
   }
 });
 
