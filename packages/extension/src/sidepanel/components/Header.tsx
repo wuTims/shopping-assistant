@@ -5,12 +5,9 @@ export function Header() {
         <span className="material-icons text-primary text-xl">shopping_bag</span>
         <h1 className="text-lg font-semibold text-text-main">Personal Shopper</h1>
       </div>
-      <button
-        className="w-8 h-8 flex items-center justify-center rounded-full text-text-muted hover:bg-gray-200 transition-colors"
-        aria-label="Settings"
-      >
+      <span className="w-8 h-8 flex items-center justify-center rounded-full text-gray-300">
         <span className="material-icons text-xl">settings</span>
-      </button>
+      </span>
     </header>
   );
 }

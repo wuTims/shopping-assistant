@@ -28,19 +28,26 @@ export default function App() {
   const [chatLoading, setChatLoading] = useState(false);
   const [priceBarCollapsed, setPriceBarCollapsed] = useState(false);
   const phaseTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const currentTabIdRef = useRef<number | null>(null);
 
   // ── Request initial state from service worker ──
   useEffect(() => {
-    chrome.runtime.sendMessage({ type: "GET_STATE" }, (response: BackgroundToSidePanelMessage | null) => {
-      if (chrome.runtime.lastError || !response) return;
-      handleMessage(response);
-    });
+    chrome.runtime.sendMessage(
+      { type: "GET_STATE", tabId: currentTabIdRef.current },
+      (response: BackgroundToSidePanelMessage | null) => {
+        if (chrome.runtime.lastError || !response) return;
+        handleMessage(response);
+      },
+    );
   }, []);
 
   // ── Listen for messages from service worker ──
   useEffect(() => {
     const listener = (message: Record<string, unknown>) => {
       if (message.target !== "sidepanel") return;
+      if (typeof message.tabId === "number") {
+        currentTabIdRef.current = message.tabId;
+      }
       handleMessage(message as BackgroundToSidePanelMessage);
     };
 
@@ -158,10 +165,10 @@ export default function App() {
         product: state.product,
         results: state.response.results,
       },
-      history: newMessages,
+      history: chatMessages,
     };
 
-    chrome.runtime.sendMessage({ type: "CHAT_REQUEST", request });
+    chrome.runtime.sendMessage({ type: "CHAT_REQUEST", request, tabId: currentTabIdRef.current });
   }, [state, chatActive, chatMessages]);
 
   const phaseText = (phase: 1 | 2 | 3) => {
@@ -275,7 +282,7 @@ export default function App() {
       {state.view === "results" && !chatActive && (
         <main className="flex-1 overflow-y-auto px-4 pt-4 pb-40 space-y-4 no-scrollbar">
           <ProductSection product={state.product} />
-          <PriceBar productPrice={state.product.price} response={state.response} />
+          <PriceBar productPrice={state.product.price} currency={state.product.currency} response={state.response} />
 
           <section className="bg-surface rounded-2xl p-4 shadow-soft border border-gray-100">
             <h3 className="font-semibold text-base mb-3 text-text-main">
@@ -315,6 +322,7 @@ export default function App() {
             <ProductSection product={state.product} />
             <PriceBar
               productPrice={state.product.price}
+              currency={state.product.currency}
               response={state.response}
               collapsed={priceBarCollapsed}
               onToggle={() => setPriceBarCollapsed(!priceBarCollapsed)}
@@ -388,7 +396,7 @@ function ChatInputBar({ onSend }: { onSend: (text: string) => void }) {
         type="text"
         value={input}
         onChange={(e) => setInput(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+        onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && handleSubmit()}
         placeholder="Ask about these..."
         className="flex-1 bg-white border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-text-main placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
       />

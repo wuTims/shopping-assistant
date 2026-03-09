@@ -150,11 +150,8 @@ export interface SearchResponse {
 // === Cache ===
 
 export interface CachedSearch {
-  productId: string;
   response: SearchResponse;
   cachedAt: number;
-  lastAccessedAt: number;
-  ttl: number;
 }
 
 // === Extension Display Types ===
@@ -165,6 +162,8 @@ export interface ProductDisplayInfo {
   price: number | null;
   currency: string | null;
   imageUrl?: string;
+  /** Base64 data URL for UI display only — never sent to backend as imageUrl */
+  displayImageDataUrl?: string;
   marketplace?: string;
 }
 
@@ -192,7 +191,7 @@ export type BackgroundToSidePanelMessage =
 export type SidePanelToBackgroundMessage =
   | { type: "select_product"; tabId: number; product: IdentifiedProduct; screenshotDataUrl: string; pageUrl: string }
   | { type: "GET_STATE" }
-  | { type: "CHAT_REQUEST"; request: ChatRequest };
+  | { type: "CHAT_REQUEST"; request: ChatRequest; tabId?: number };
 
 // === Chat ===
 

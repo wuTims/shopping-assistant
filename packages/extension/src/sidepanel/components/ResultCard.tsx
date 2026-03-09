@@ -8,7 +8,10 @@ interface Props {
 export function ResultCard({ ranked, compact }: Props) {
   const { result } = ranked;
   const priceStr = result.price !== null
-    ? `$${result.price.toFixed(2)}`
+    ? new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: result.currency || "USD",
+      }).format(result.price)
     : "N/A";
 
   const savingsStr = ranked.savingsPercent !== null && ranked.savingsPercent > 0
@@ -16,7 +19,13 @@ export function ResultCard({ ranked, compact }: Props) {
     : null;
 
   const handleClick = () => {
-    window.open(result.productUrl, "_blank", "noopener");
+    try {
+      const url = new URL(result.productUrl);
+      if (url.protocol !== "http:" && url.protocol !== "https:") return;
+      window.open(url.href, "_blank", "noopener");
+    } catch {
+      // Malformed URL — ignore click
+    }
   };
 
   const confidenceIndicator =

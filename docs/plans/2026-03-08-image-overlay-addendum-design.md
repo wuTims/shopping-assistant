@@ -63,7 +63,7 @@ The script's behavior is indistinguishable from a simple UI enhancement extensio
 
 Add an `IMAGE_CLICKED` message handler alongside the existing `select_product` handler.
 
-```
+```text
 chrome.runtime.onMessage: IMAGE_CLICKED
   → open side panel
   → send SearchRequest { imageUrl, title: titleHint, sourceUrl: pageUrl }
@@ -103,7 +103,7 @@ Add `IMAGE_CLICKED` to the extension message types if a message type union exist
 
 ## Architecture Diagram
 
-```
+```text
                     ┌─────────────────────────────────┐
                     │         USER ACTION              │
                     ├────────────────┬────────────────┤

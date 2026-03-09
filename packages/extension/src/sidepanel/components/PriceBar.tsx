@@ -2,12 +2,14 @@ import type { SearchResponse } from "@shopping-assistant/shared";
 
 interface Props {
   productPrice: number | null;
+  currency?: string | null;
   response: SearchResponse;
   collapsed?: boolean;
   onToggle?: () => void;
 }
 
-export function PriceBar({ productPrice, response, collapsed, onToggle }: Props) {
+export function PriceBar({ productPrice, currency, response, collapsed, onToggle }: Props) {
+  const currencySymbol = currency === "USD" || !currency ? "$" : currency === "EUR" ? "€" : currency === "GBP" ? "£" : `${currency} `;
   const prices = response.results
     .map((r) => r.result.price)
     .filter((p): p is number => p !== null);
@@ -67,8 +69,8 @@ export function PriceBar({ productPrice, response, collapsed, onToggle }: Props)
         />
       </div>
       <div className="flex justify-between text-xs text-text-muted mb-4">
-        <span>${low.toFixed(2)}</span>
-        <span>${high.toFixed(2)}</span>
+        <span>{currencySymbol}{low.toFixed(2)}</span>
+        <span>{currencySymbol}{high.toFixed(2)}</span>
       </div>
 
       {/* AI insight */}

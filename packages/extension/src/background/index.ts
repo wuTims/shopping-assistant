@@ -12,9 +12,18 @@ const BACKEND_URL = "http://localhost:8080";
 
 console.log("[Shopping Assistant] Service worker started");
 
-// State tracking for GET_STATE
-let lastSidePanelMessage: Record<string, unknown> | null = null;
+// Per-tab state snapshots for GET_STATE (only view-level messages, not transient chat events)
+const tabState = new Map<number, Record<string, unknown>>();
 let activeTabId: number | null = null;
+
+/** Message types that represent a view state worth restoring on panel reopen */
+const VIEW_STATE_TYPES = new Set([
+  "identifying",
+  "product_selection",
+  "searching",
+  "results",
+  "error",
+]);
 
 // Open side panel and trigger screenshot on extension icon click
 chrome.action.onClicked.addListener(async (tab) => {
@@ -88,7 +97,8 @@ chrome.action.onClicked.addListener(async (tab) => {
 // Listen for messages from side panel and content script
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "GET_STATE") {
-    sendResponse(lastSidePanelMessage);
+    const tabId = message.tabId ?? activeTabId;
+    sendResponse(tabId ? tabState.get(tabId) ?? null : null);
     return false;
   }
 
@@ -131,7 +141,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "CHAT_REQUEST") {
-    const { request } = message as { request: ChatRequest };
+    const { request, tabId: chatTabId } = message as { request: ChatRequest; tabId?: number };
+    const replyTabId = chatTabId ?? sender.tab?.id ?? activeTabId;
     (async () => {
       try {
         const res = await fetch(`${BACKEND_URL}/chat`, {
@@ -141,12 +152,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         if (!res.ok) throw new Error("Chat request failed");
         const data = await res.json();
-        if (activeTabId) {
-          notifySidePanel(activeTabId, { type: "chat_response", reply: data.reply });
+        if (replyTabId) {
+          notifySidePanel(replyTabId, { type: "chat_response", reply: data.reply });
         }
       } catch {
-        if (activeTabId) {
-          notifySidePanel(activeTabId, { type: "chat_error", error: "Chat failed" });
+        if (replyTabId) {
+          notifySidePanel(replyTabId, { type: "chat_error", error: "Chat failed" });
         }
       }
       sendResponse({ status: "ok" });
@@ -162,10 +173,19 @@ function identifiedToDisplay(product: IdentifiedProduct): ProductDisplayInfo {
     name: product.name,
     price: product.price,
     currency: product.currency,
-    imageUrl: product.imageRegion
+    // imageRegion is raw base64 — store as displayImageDataUrl for UI only.
+    // Do NOT put it in imageUrl, which the backend expects to be HTTP/S.
+    displayImageDataUrl: product.imageRegion
       ? `data:image/png;base64,${product.imageRegion}`
       : undefined,
   };
+}
+
+async function computeImageHash(input: string): Promise<string> {
+  const encoded = new TextEncoder().encode(input);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", encoded);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.slice(0, 8).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function searchForProduct(
@@ -175,7 +195,9 @@ async function searchForProduct(
   pageUrl: string,
   imageUrl?: string,
 ): Promise<void> {
-  const cacheKey = `search:${product.name}:${pageUrl}`;
+  const imageInput = imageUrl || screenshotDataUrl;
+  const imageHash = imageInput ? await computeImageHash(imageInput) : "";
+  const cacheKey = `search:${product.name}:${pageUrl}:${imageHash}`;
   const cached = await getCached(cacheKey);
   if (cached) {
     const enriched = enrichProduct(product, cached);
@@ -184,12 +206,16 @@ async function searchForProduct(
   }
 
   try {
+    // Prefer cropped product image (displayImageDataUrl) over full screenshot for imageBase64
+    const croppedBase64 = product.displayImageDataUrl?.split(",")[1];
     const searchReq: SearchRequest = {
       imageUrl: imageUrl ?? product.imageUrl ?? null,
-      imageBase64: !imageUrl && screenshotDataUrl
-        ? (screenshotDataUrl.includes(",")
-          ? screenshotDataUrl.split(",")[1]
-          : screenshotDataUrl)
+      imageBase64: !imageUrl
+        ? (croppedBase64 ?? (screenshotDataUrl
+          ? (screenshotDataUrl.includes(",")
+            ? screenshotDataUrl.split(",")[1]
+            : screenshotDataUrl)
+          : null))
         : null,
       title: product.name !== "Product" ? product.name : null,
       price: product.price,
@@ -236,7 +262,10 @@ function enrichProduct(product: ProductDisplayInfo, response: SearchResponse): P
 
 function notifySidePanel(tabId: number, message: Record<string, unknown>): void {
   const full = { target: "sidepanel", tabId, ...message };
-  lastSidePanelMessage = full;
+  // Only persist view-level state, not transient chat events
+  if (VIEW_STATE_TYPES.has(message.type as string)) {
+    tabState.set(tabId, full);
+  }
   chrome.runtime.sendMessage(full).catch(() => {
     // Side panel may not be ready yet
   });

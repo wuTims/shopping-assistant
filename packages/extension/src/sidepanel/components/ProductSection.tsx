@@ -13,9 +13,9 @@ export function ProductSection({ product }: Props) {
     <section className="bg-surface rounded-2xl p-4 shadow-soft border border-gray-100">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          {product.imageUrl ? (
+          {(product.imageUrl || product.displayImageDataUrl) ? (
             <img
-              src={product.imageUrl}
+              src={product.imageUrl || product.displayImageDataUrl}
               alt={product.name}
               className="w-14 h-14 rounded-xl object-cover shadow-sm"
             />
