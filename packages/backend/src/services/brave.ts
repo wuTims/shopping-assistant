@@ -8,21 +8,17 @@ const BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search";
 const BRAVE_API_KEY = process.env.BRAVE_API_KEY!;
 const PER_QUERY_TIMEOUT_MS = 8_000;
 
-const SHOPPING_DOMAINS = new Set([
-  "amazon.com", "amazon.co.uk", "amazon.de", "amazon.co.jp",
-  "ebay.com", "ebay.co.uk",
-  "walmart.com", "target.com", "bestbuy.com", "newegg.com",
-  "aliexpress.com", "dhgate.com", "temu.com", "1688.com",
-  "etsy.com", "costco.com", "bhphotovideo.com",
-  "homedepot.com", "lowes.com", "wayfair.com",
-  "zappos.com", "nordstrom.com", "macys.com",
-]);
-
-function isKnownMarketplace(url: string): boolean {
+/** Check if a URL belongs to a known shopping marketplace using the shared domain list. */
+function isShoppingDomain(url: string): boolean {
+  const name = extractMarketplace(url);
+  // extractMarketplace returns a capitalized hostname fallback for unknown sites
+  // Known marketplaces return a curated display name (e.g. "Amazon", "eBay")
+  // We check that the result is a known name, not just a hostname fallback
   try {
     const hostname = new URL(url).hostname.replace(/^www\./, "");
-    return SHOPPING_DOMAINS.has(hostname) ||
-      [...SHOPPING_DOMAINS].some((d) => hostname.endsWith(`.${d}`));
+    const parts = hostname.split(".");
+    const fallback = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+    return name !== "Unknown" && name !== fallback;
   } catch {
     return false;
   }
@@ -96,7 +92,7 @@ export async function searchProducts(queries: string[]): Promise<ProviderSearchO
 
         // Only add the web result itself if it has product data or is from a known shopping domain.
         // This filters out review articles, news posts, and forum links that would yield bad price data.
-        const isShoppingSite = isKnownMarketplace(item.url);
+        const isShoppingSite = isShoppingDomain(item.url);
         if (item.product_cluster?.length || isShoppingSite) {
           const parsed = parsePriceFromSnippets(item);
           queryResults.push({
