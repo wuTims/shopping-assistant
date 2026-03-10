@@ -18,7 +18,8 @@
     "@hono/node-ws": "^1.0.0",
     "@shopping-assistant/shared": "workspace:*",
     "hono": "^4.0.0",
-    "playwright": "^1.58.2"
+    "playwright": "^1.58.2",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

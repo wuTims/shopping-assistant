@@ -30,10 +30,12 @@ export async function identifyProduct(
   title: string | null,
 ): Promise<IdentifyProductResult> {
   const prompt = [
-    "You are a product identification expert.",
+    "You are a product identification expert for a shopping comparison tool.",
     "Analyze the product image and any provided title.",
-    "Identify the product category, brand, key attributes, and generate 2-3 marketplace search queries.",
-    "Search queries should be specific enough to find this exact product or very similar alternatives on shopping sites.",
+    "Identify the product category, brand, key attributes, and generate 2-3 SHOPPING search queries.",
+    "Search queries MUST include shopping intent words like 'buy', 'price', 'shop', or 'for sale'.",
+    "Queries should find this exact product or very similar alternatives on shopping sites like Amazon, eBay, Walmart, AliExpress.",
+    "Example good queries: 'buy Nike Air Max 90 white men', 'Nike Air Max 90 price comparison'",
     title ? `Product title from the page: "${title}"` : "No product title available — rely on the image.",
   ].join("\n");
 

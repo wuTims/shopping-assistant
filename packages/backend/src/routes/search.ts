@@ -1,19 +1,13 @@
 import { Hono } from "hono";
-import type { SearchRequest, SearchResponse, SearchResult } from "@shopping-assistant/shared";
+import type { SearchRequest, SearchResponse, ProductIdentification } from "@shopping-assistant/shared";
 import {
   SEARCH_TIMEOUT_MS,
   MAX_RESULTS_FOR_RANKING,
-  MAX_IMAGES_FOR_RANKING,
-  RANKING_IMAGE_TIMEOUT_MS,
   MAX_PRICE_FALLBACK_RESULTS,
   PRICE_FALLBACK_TIMEOUT_MS,
 } from "@shopping-assistant/shared";
 import {
   identifyProduct,
-  groundedSearch,
-  rankResults,
-  fetchImage,
-  RankingOutputValidationError,
 } from "../services/gemini.js";
 import type { FetchedImage } from "../services/gemini.js";
 import { searchProducts } from "../services/brave.js";
@@ -25,7 +19,6 @@ import {
   applyRanking,
   buildFallbackScores,
   heuristicPreSort,
-  selectImageCandidates,
 } from "../services/ranking.js";
 
 export const searchRoute = new Hono();
@@ -57,6 +50,12 @@ searchRoute.post("/", async (c) => {
 
   console.log(`[search:${requestId}] Request for: ${body.title ?? body.imageUrl ?? "(base64 image)"}`);
 
+  // Hard request-level timeout — safety net to prevent unbounded latency
+  const abortController = new AbortController();
+  const requestTimer = setTimeout(() => abortController.abort(), SEARCH_TIMEOUT_MS);
+
+  try {
+
   // ── Phase 1: identify product + brave(title queries) in parallel ──────────
 
   const imageSource = body.imageUrl
@@ -65,22 +64,49 @@ searchRoute.post("/", async (c) => {
 
   const titleQueries = buildTitleQueries(body.title, body.sourceUrl);
 
-  const [identifyResult, titleBraveResult] = await Promise.allSettled([
-    identifyProduct(imageSource, body.title),
-    titleQueries.length > 0
-      ? withTimeout(searchProducts(titleQueries), Math.max(remaining() - 1000, 5000))
-      : Promise.resolve(emptyProviderOutcome()),
-  ]);
+  // Always kick off title Brave search in parallel
+  const titleBravePromise = titleQueries.length > 0
+    ? withTimeout(searchProducts(titleQueries), Math.max(remaining() - 1000, 5000))
+    : Promise.resolve(emptyProviderOutcome());
 
-  // Identification is required
-  if (identifyResult.status === "rejected") {
-    console.error(`[search:${requestId}] Product identification failed:`, identifyResult.reason);
-    const message = identifyResult.reason instanceof Error ? identifyResult.reason.message : "Unknown error";
-    return c.json({ error: "product_identification_failed", message, requestId }, 422);
+  let identification: ProductIdentification;
+
+  if (
+    body.identification &&
+    typeof body.identification.category === "string" &&
+    typeof body.identification.description === "string" &&
+    Array.isArray(body.identification.searchQueries) &&
+    body.identification.searchQueries.length > 0
+  ) {
+    // Use pre-computed identification from /identify — skip redundant Gemini call
+    identification = body.identification;
+    console.log(`[search:${requestId}] Using provided identification: ${identification.category} — ${identification.description}`);
+  } else {
+    // No identification provided — identify from scratch (overlay click path)
+    try {
+      const result = await identifyProduct(imageSource, body.title);
+      identification = result.identification;
+      console.log(`[search:${requestId}] Identified: ${identification.category} — ${identification.description}`);
+    } catch (err) {
+      console.error(`[search:${requestId}] Product identification failed:`, err);
+      // Suppress the dangling Brave promise so it doesn't consume quota for a failed request
+      titleBravePromise.catch(() => {});
+      const message = err instanceof Error ? err.message : "Unknown error";
+      return c.json({ error: "product_identification_failed", message, requestId }, 422);
+    }
   }
 
-  const { identification, originalImage } = identifyResult.value;
-  console.log(`[search:${requestId}] Identified: ${identification.category} — ${identification.description}`);
+  // Check if request was aborted during Phase 1
+  if (abortController.signal.aborted) {
+    console.warn(`[search:${requestId}] Aborted after Phase 1 (${Date.now() - searchStart}ms)`);
+    titleBravePromise.catch(() => {});
+    return c.json({ error: "timeout", message: "Search request timed out", requestId }, 504);
+  }
+
+  const titleBraveResult = await titleBravePromise.then(
+    (v) => ({ status: "fulfilled" as const, value: v }),
+    (e) => ({ status: "rejected" as const, reason: e }),
+  );
 
   const titleBraveOutcome = titleBraveResult.status === "fulfilled"
     ? titleBraveResult.value
@@ -90,7 +116,9 @@ searchRoute.post("/", async (c) => {
     console.error(`[search:${requestId}] Brave (title) failed:`, titleBraveResult.reason);
   }
 
-  // ── Phase 2: parallel search — grounding + brave(AI) + brave(marketplace) ──
+  // ── Phase 2: parallel search — brave(AI) + brave(marketplace) ────────────
+  // NOTE: Gemini Grounding was removed — 100% timeout rate, 0 results returned.
+  // Grounding fields kept in response for backward compatibility.
 
   const aiQueries = identification.searchQueries;
   const marketplaceQueries = generateMarketplaceQueries(
@@ -100,9 +128,8 @@ searchRoute.post("/", async (c) => {
 
   const skipAiBrave = !hasNewQueries(aiQueries, titleQueries);
 
-  const [groundingResult, aiBraveResult, marketplaceBraveResult] =
+  const [aiBraveResult, marketplaceBraveResult] =
     await Promise.allSettled([
-      withTimeout(groundedSearch(aiQueries), phase2Deadline),
       skipAiBrave
         ? Promise.resolve(emptyProviderOutcome())
         : withTimeout(searchProducts(aiQueries), phase2Deadline),
@@ -111,9 +138,6 @@ searchRoute.post("/", async (c) => {
         : Promise.resolve(emptyProviderOutcome()),
     ]);
 
-  const groundingOutcome = groundingResult.status === "fulfilled"
-    ? groundingResult.value
-    : rejectedProviderOutcome(aiQueries.length, groundingResult.reason);
   const aiBraveOutcome = aiBraveResult.status === "fulfilled"
     ? aiBraveResult.value
     : rejectedProviderOutcome(aiQueries.length, aiBraveResult.reason);
@@ -122,9 +146,6 @@ searchRoute.post("/", async (c) => {
       ? marketplaceBraveResult.value
       : rejectedProviderOutcome(marketplaceQueries.length, marketplaceBraveResult.reason);
 
-  if (groundingResult.status === "rejected") {
-    console.error(`[search:${requestId}] Grounding failed:`, groundingResult.reason);
-  }
   if (aiBraveResult.status === "rejected") {
     console.error(`[search:${requestId}] Brave (AI) failed:`, aiBraveResult.reason);
   }
@@ -138,9 +159,15 @@ searchRoute.post("/", async (c) => {
     marketplaceBraveOutcome,
   );
 
-  // ── Phase 3: merge → dedup → heuristicPreSort → cap → fetch images ───────
+  // Check if request was aborted during Phase 2
+  if (abortController.signal.aborted) {
+    console.warn(`[search:${requestId}] Aborted after Phase 2 (${Date.now() - searchStart}ms)`);
+    return c.json({ error: "timeout", message: "Search request timed out", requestId }, 504);
+  }
 
-  const allResults = [...groundingOutcome.results, ...braveOutcome.results];
+  // ── Phase 3: merge → dedup → heuristicPreSort → cap ────────────────────
+
+  const allResults = [...braveOutcome.results];
   const deduped = mergeAndDedup(allResults);
   const preSorted = heuristicPreSort(deduped, identification, body.price);
   const capped = preSorted.slice(0, MAX_RESULTS_FOR_RANKING);
@@ -169,53 +196,20 @@ searchRoute.post("/", async (c) => {
     console.log("[search] Skipping price fallback — insufficient time remaining");
   }
 
-  // Fetch images for top candidates only
-  const imageCandidates = selectImageCandidates(capped, MAX_IMAGES_FOR_RANKING);
-  const resultImages = new Map<string, FetchedImage>();
-
-  const imageResults = await Promise.allSettled(
-    imageCandidates.map(async (r) => {
-      const img = await fetchImage(r.imageUrl!, RANKING_IMAGE_TIMEOUT_MS);
-      return { id: r.id, image: img };
-    }),
-  );
-  for (const result of imageResults) {
-    if (result.status === "fulfilled") {
-      resultImages.set(result.value.id, result.value.image);
-    }
+  if (abortController.signal.aborted) {
+    console.warn(`[search:${requestId}] Aborted after price fallback (${Date.now() - searchStart}ms)`);
+    return c.json({ error: "timeout", message: "Search request timed out", requestId }, 504);
   }
 
-  console.log(`[search:${requestId}] Fetched ${resultImages.size}/${imageCandidates.length} result images`);
-
-  // ── Phase 4: AI ranking (with deadline fallback) ──────────────────────────
+  // ── Phase 4: ranking ─────────────────────────────────────────────────────
 
   const rankStart = Date.now();
-  let scores: Record<string, number> = {};
-  let rankingStatus: "ok" | "fallback" = "ok";
-  let rankingFailureReason: string | null = null;
-
-  if (remaining() < 2000) {
-    // Not enough time for AI ranking — use heuristic fallback
-    rankingStatus = "fallback";
-    rankingFailureReason = "Insufficient time for AI ranking";
-    console.log(`[search:${requestId}] Skipping AI ranking (${remaining()}ms left), using fallback`);
-    scores = buildFallbackScores(capped, identification);
-  } else {
-    try {
-      scores = await rankResults({
-        originalImage,
-        results: capped,
-        resultImages,
-        identification,
-      });
-    } catch (err) {
-      rankingStatus = "fallback";
-      rankingFailureReason = getRankingFailureReason(err);
-      console.error(`[search:${requestId}] Ranking failed (${rankingFailureReason}), using heuristic fallback:`, err);
-      scores = buildFallbackScores(capped, identification);
-    }
-  }
+  const scores = buildFallbackScores(capped, identification);
   const rankingDurationMs = Date.now() - rankStart;
+  // Heuristic scoring is the sole ranking path (AI ranking removed in 362f16e).
+  // "ok" means ranking completed successfully — the heuristic is the baseline.
+  const rankingStatus: "ok" | "fallback" = "ok";
+  const rankingFailureReason: string | null = null;
 
   const ranked = applyRanking(capped, scores, body.price);
 
@@ -234,10 +228,10 @@ searchRoute.post("/", async (c) => {
     searchMeta: {
       totalFound: deduped.length,
       braveResultCount: braveOutcome.results.length,
-      groundingResultCount: groundingOutcome.results.length,
+      groundingResultCount: 0,
       sourceStatus: {
         brave: braveOutcome.status,
-        grounding: groundingOutcome.status,
+        grounding: "ok" as const,
       },
       sourceDiagnostics: {
         brave: {
@@ -247,10 +241,10 @@ searchRoute.post("/", async (c) => {
           timedOutQueries: braveOutcome.timedOutQueries,
         },
         grounding: {
-          totalQueries: groundingOutcome.totalQueries,
-          successfulQueries: groundingOutcome.successfulQueries,
-          failedQueries: groundingOutcome.failedQueries,
-          timedOutQueries: groundingOutcome.timedOutQueries,
+          totalQueries: 0,
+          successfulQueries: 0,
+          failedQueries: 0,
+          timedOutQueries: 0,
         },
       },
       searchDurationMs: Date.now() - searchStart,
@@ -262,6 +256,10 @@ searchRoute.post("/", async (c) => {
 
   console.log(`[search:${requestId}] Complete: ${ranked.length} results in ${response.searchMeta.searchDurationMs}ms`);
   return c.json(response);
+
+  } finally {
+    clearTimeout(requestTimer);
+  }
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -348,17 +346,3 @@ function rejectedProviderOutcome(totalQueries: number, err: unknown): ProviderSe
   };
 }
 
-function getRankingFailureReason(err: unknown): string {
-  if (err instanceof RankingOutputValidationError) {
-    if (err.details.length > 0) {
-      return `${err.message} (${err.details.join("; ")})`;
-    }
-    return err.message;
-  }
-
-  if (err instanceof Error) {
-    return err.message;
-  }
-
-  return "Unknown ranking error";
-}

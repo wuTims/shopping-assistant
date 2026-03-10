@@ -23,5 +23,6 @@ export const RANKING_IMAGE_TIMEOUT_MS = 3_000;
 
 export const OVERLAY_ICON_SIZE_PX = 28;
 export const OVERLAY_ICON_HOVER_SIZE_PX = 32;
-export const MIN_IMAGE_SIZE_PX = 100;
+export const MIN_IMAGE_SIZE_PX = 60;
 export const OVERLAY_TITLE_HINT_MAX_LENGTH = 200;
+export const OVERLAY_HIDE_DELAY_MS = 200;

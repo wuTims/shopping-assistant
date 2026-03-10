@@ -57,6 +57,8 @@ export interface SearchRequest {
   price: number | null;
   currency: string | null;
   sourceUrl: string;
+  /** Pre-computed identification from /identify — skips redundant Gemini call in /search */
+  identification?: ProductIdentification | null;
 }
 
 export interface ProductIdentification {

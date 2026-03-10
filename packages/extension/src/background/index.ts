@@ -4,6 +4,7 @@ import type {
   SearchRequest,
   SearchResponse,
   ProductDisplayInfo,
+  ProductIdentification,
   ChatRequest,
 } from "@shopping-assistant/shared";
 import { CACHE_TTL_MS, CACHE_MAX_ENTRIES } from "@shopping-assistant/shared";
@@ -194,6 +195,7 @@ async function searchForProduct(
   screenshotDataUrl: string,
   pageUrl: string,
   imageUrl?: string,
+  identification?: ProductIdentification | null,
 ): Promise<void> {
   const imageInput = imageUrl || screenshotDataUrl;
   const imageHash = imageInput ? await computeImageHash(imageInput) : "";
@@ -221,6 +223,7 @@ async function searchForProduct(
       price: product.price,
       currency: product.currency,
       sourceUrl: pageUrl,
+      identification: identification ?? null,
     };
 
     const searchRes = await fetch(`${BACKEND_URL}/search`, {

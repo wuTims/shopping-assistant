@@ -3,6 +3,7 @@ import {
   OVERLAY_ICON_HOVER_SIZE_PX,
   MIN_IMAGE_SIZE_PX,
   OVERLAY_TITLE_HINT_MAX_LENGTH,
+  OVERLAY_HIDE_DELAY_MS,
 } from "@shopping-assistant/shared";
 
 const OVERLAY_HOVER_SCALE = OVERLAY_ICON_HOVER_SIZE_PX / OVERLAY_ICON_SIZE_PX;
@@ -11,6 +12,7 @@ const BOUND_ATTR = "data-shopping-assistant-bound";
 const OVERLAY_ATTR = "data-shopping-assistant-overlay";
 
 function createOverlayIcon(img: HTMLImageElement): HTMLDivElement {
+  // Outer element: transparent hit area (28 + 24 padding = 52px clickable zone)
   const el = document.createElement("div");
   el.setAttribute(OVERLAY_ATTR, "");
 
@@ -18,34 +20,49 @@ function createOverlayIcon(img: HTMLImageElement): HTMLDivElement {
     position: "absolute",
     width: `${OVERLAY_ICON_SIZE_PX}px`,
     height: `${OVERLAY_ICON_SIZE_PX}px`,
-    borderRadius: "50%",
-    background: "rgba(255, 255, 255, 0.92)",
-    border: "1px solid #e5e7eb",
-    boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+    padding: "12px",
+    margin: "-12px",
+    boxSizing: "content-box",
     cursor: "pointer",
     zIndex: "999999",
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    transition: "transform 0.15s ease, box-shadow 0.15s ease",
     pointerEvents: "auto",
+  });
+
+  // Inner element: visible 28px circle with border and shadow
+  const circle = document.createElement("div");
+  Object.assign(circle.style, {
+    width: "100%",
+    height: "100%",
+    borderRadius: "50%",
+    background: "rgba(255, 255, 255, 0.92)",
+    border: "1px solid #e5e7eb",
+    boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    transition: "transform 0.15s ease, box-shadow 0.15s ease",
+    pointerEvents: "none",
   });
 
   const icon = document.createElement("span");
   icon.textContent = "\u{1F50D}";
   icon.style.fontSize = "14px";
   icon.style.lineHeight = "1";
-  el.appendChild(icon);
+  circle.appendChild(icon);
+  el.appendChild(circle);
 
   el.addEventListener("mouseenter", () => {
-    el.style.transform = `scale(${OVERLAY_HOVER_SCALE})`;
-    el.style.boxShadow = "0 4px 12px rgba(0,0,0,0.2)";
+    circle.style.transform = `scale(${OVERLAY_HOVER_SCALE})`;
+    circle.style.boxShadow = "0 4px 12px rgba(0,0,0,0.2)";
     el.title = "Find cheaper alternatives";
   });
 
   el.addEventListener("mouseleave", () => {
-    el.style.transform = "scale(1)";
-    el.style.boxShadow = "0 2px 8px rgba(0,0,0,0.15)";
+    circle.style.transform = "scale(1)";
+    circle.style.boxShadow = "0 2px 8px rgba(0,0,0,0.15)";
   });
 
   el.addEventListener("click", (e) => {
@@ -104,8 +121,10 @@ function showOverlay(img: HTMLImageElement): void {
   parent.appendChild(overlay);
   activeOverlay = { el: overlay, img };
 
+  overlay.addEventListener("mouseenter", () => {
+    if (hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null; }
+  });
   overlay.addEventListener("mouseleave", scheduleHide);
-  img.addEventListener("mouseleave", scheduleHide);
 }
 
 function scheduleHide(): void {
@@ -113,7 +132,7 @@ function scheduleHide(): void {
   hideTimeout = setTimeout(() => {
     if (!activeOverlay) return;
     hideOverlay();
-  }, 80);
+  }, OVERLAY_HIDE_DELAY_MS);
 }
 
 function hideOverlay(): void {
@@ -135,7 +154,10 @@ function attachOverlay(img: HTMLImageElement): void {
   img.addEventListener("mouseenter", () => showOverlay(img));
   img.addEventListener("mouseleave", (e) => {
     const related = e.relatedTarget as Node | null;
-    if (activeOverlay && related && activeOverlay.el.contains(related)) return;
+    if (activeOverlay && related) {
+      // Don't hide if mouse moved to overlay or its parent container
+      if (activeOverlay.el.contains(related) || activeOverlay.el === related) return;
+    }
     scheduleHide();
   });
 }
