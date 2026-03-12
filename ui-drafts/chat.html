@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>Product Price Analysis Dashboard</title>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap"
+        rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet" />
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#d95a00',
+                        'primary-dark': '#b34800',
+                        'background-light': '#fdfaf5',
+                        'background-dark': '#1e1e1e',
+                        'surface-light': '#ffffff',
+                        'surface-dark': '#2c2c2c',
+                        'text-main-light': '#1a202c',
+                        'text-main-dark': '#f7fafc',
+                        'text-muted-light': '#4a5568',
+                        'text-muted-dark': '#a0aec0',
+                        'accent-green': '#10b981',
+                        'accent-red': '#ef4444',
+                        'accent-yellow': '#f59e0b',
+                    },
+                    fontFamily: {
+                        display: ['Inter', 'sans-serif'],
+                    },
+                    borderRadius: {
+                        DEFAULT: '1rem',
+                    },
+                    boxShadow: {
+                        'soft': '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03)',
+                    }
+                },
+            },
+        };
+    </script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+    <style>
+        body {
+            min-height: max(884px, 100dvh);
+        }
+    </style>
+</head>
+
+<body
+    class="bg-gray-100 dark:bg-gray-900 text-text-main-light dark:text-text-main-dark min-h-screen flex justify-end antialiased">
+    <div
+        class="w-[400px] h-screen bg-background-light dark:bg-background-dark border-l border-gray-200 dark:border-gray-800 overflow-hidden flex flex-col relative shadow-2xl">
+        <header
+            class="flex items-center justify-between px-6 py-4 bg-background-light dark:bg-background-dark border-b border-gray-200 dark:border-gray-800 z-10 sticky top-0">
+            <div class="flex items-center gap-2">
+                <span class="material-icons text-primary">shopping_bag</span>
+                <h1 class="text-lg font-semibold flex-1">Personal Shopper</h1>
+            </div>
+            <div class="flex items-center gap-2">
+                <button
+                    class="w-8 h-8 flex items-center justify-center rounded-full text-text-muted-light dark:text-text-muted-dark hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors">
+                    <span class="material-icons text-xl">settings</span>
+                </button>
+                <button
+                    class="w-8 h-8 flex items-center justify-center rounded-full text-text-muted-light dark:text-text-muted-dark hover:bg-gray-200 dark:hover:bg-gray-800 transition-colors">
+                    <span class="material-icons text-xl">close</span>
+                </button>
+            </div>
+        </header>
+        <main class="flex-1 overflow-y-auto px-4 pt-4 pb-24 space-y-4 no-scrollbar">
+            <section
+                class="bg-surface-light dark:bg-surface-dark rounded-2xl p-4 shadow-soft border border-gray-100 dark:border-gray-800">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-4">
+                        <img alt="Luxury Bag box" class="w-16 h-16 rounded-xl object-cover shadow-sm"
+                            src="https://lh3.googleusercontent.com/aida-public/AB6AXuCvhm0cwX6TyVaBExTTObunEPEBf6xA13QXIODD-mjV4a4AJCEks716Cuxey8xW_gX_hcx9Acbw151-nCotHJSMCMsBpRzgNvi9wfLACnUx4cDqM8pGzyCUpWkDUngQ2lYUkCSCJKw9uVobsALHkO7X4YFMat0S5dyH4Ny0NPgjgyMGxgftTv1hf5Fyp1V7YNM_-rP2FmOmtkZjq2KNG4XF0BAVZb7JW-IfL-2IPiwk8Z1mCgAIpoecpZe38s2VZkoxoz0O8G-rruRQ" />
+                        <div>
+                            <h2 class="font-medium text-text-muted-light dark:text-text-muted-dark text-sm">Current
+                                Product</h2>
+                            <p class="text-xl font-bold mt-0.5">Luxury Bag <span class="text-primary ml-1">$400</span>
+                            </p>
+                        </div>
+                    </div>
+                    <span
+                        class="bg-orange-100 text-primary dark:bg-orange-900/30 dark:text-orange-400 text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm">
+                        You're Here
+                    </span>
+                </div>
+            </section>
+            <section
+                class="bg-surface-light dark:bg-surface-dark rounded-2xl p-5 shadow-soft border border-gray-100 dark:border-gray-800">
+                <div class="flex items-center gap-2 mb-4 text-accent-red">
+                    <span class="material-icons text-sm">warning_amber</span>
+                    <span class="text-sm font-medium text-text-muted-light dark:text-text-muted-dark">This price
+                        is</span>
+                    <span class="text-sm font-bold text-accent-red">HIGH</span>
+                </div>
+                <div
+                    class="relative h-2 rounded-full w-full mb-2 bg-gradient-to-r from-accent-green via-accent-yellow to-accent-red">
+                    <div class="absolute top-1/2 -translate-y-1/2 w-4 h-4 bg-white rounded-full border-4 border-accent-red shadow-sm z-10"
+                        style="left: 80%;"></div>
+                    <div class="absolute top-[-24px] w-px h-[32px] bg-accent-red opacity-50 z-0" style="left: 80%;">
+                    </div>
+                </div>
+                <div class="flex justify-between text-xs text-text-muted-light dark:text-text-muted-dark mb-5">
+                    <span>$150</span>
+                    <span>$500</span>
+                </div>
+                <div
+                    class="bg-orange-50 dark:bg-orange-900/20 border border-orange-100 dark:border-orange-900/30 rounded-xl p-3 flex items-center gap-3">
+                    <div
+                        class="w-8 h-8 rounded-full bg-accent-green flex items-center justify-center text-white shrink-0 shadow-sm">
+                        <span class="material-icons text-sm">smart_toy</span>
+                    </div>
+                    <p class="text-sm text-text-main-light dark:text-text-main-dark leading-snug">
+                        <span class="font-bold text-primary dark:text-orange-400">41%</span> above average. Best on
+                        AliExpress.
+                    </p>
+                </div>
+            </section>
+            <section
+                class="bg-surface-light dark:bg-surface-dark rounded-2xl p-5 shadow-soft border border-gray-100 dark:border-gray-800">
+                <h3 class="font-semibold text-lg mb-4 text-text-main-light dark:text-text-main-dark">Top results</h3>
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between group">
+                        <div class="flex items-center gap-4">
+                            <img alt="Luxury bag alternative"
+                                class="w-12 h-12 rounded-xl object-cover mix-blend-multiply opacity-90 group-hover:opacity-100 transition-opacity"
+                                src="https://lh3.googleusercontent.com/aida-public/AB6AXuDW6s8sinL9OdqxaHDG8R87pR1FeVynMS3CsM2Up_ZsWmwrvxA9QISrnYsUTZA9wNviWSd5M2RG7NoEj23cuivdV9q3iCijk0MnMFx3tP0n3bPO6aiy5jiyVu0dojhczrDAhHy5USpW9YRNW_jNJriAaK-bQWOfEJ1D-4mZDjnqIlzb0AgzXR-1euqOQUIqP7RHFN5PfElIVUH490DhfWZkL2EOyStajxYQG3EYrVcCnwhAyY20h8EhWqGQwwSLwJBOX-V69HXJ3eIy"
+                                style="background-color: #fca5a5;" />
+                            <div>
+                                <h4 class="font-medium text-text-main-light dark:text-text-main-dark text-sm">Luxury Bag
+                                </h4>
+                                <p class="text-text-muted-light dark:text-text-muted-dark text-xs">AliExpress</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="text-right">
+                                <p class="font-bold text-base text-text-main-light dark:text-text-main-dark">$189</p>
+                                <p class="text-accent-green text-xs font-medium">53% less</p>
+                            </div>
+                            <button
+                                class="text-primary hover:bg-orange-50 dark:hover:bg-orange-900/20 p-1.5 rounded-lg transition-colors">
+                                <span class="material-icons text-[20px]">bookmark</span>
+                            </button>
+                        </div>
+                    </div>
+                    <hr class="border-gray-100 dark:border-gray-800" />
+                    <div class="flex items-center justify-between group">
+                        <div class="flex items-center gap-4">
+                            <img alt="Luxury bag alternative"
+                                class="w-12 h-12 rounded-xl object-cover mix-blend-multiply opacity-90 group-hover:opacity-100 transition-opacity"
+                                src="https://lh3.googleusercontent.com/aida-public/AB6AXuD3VZGHiXcDhmueIWHOdRNg1oHjXGB2aZsnCnqExBLtVpiVxRVicj9MHmQptjG-nBVVEqSV9q1XBiM0gljPNnYylB-RkEb2wVVOWMwCXA0sZpFPEoMmuravup6LTn76ef9XRtRdZsS76Qu8PvyBbSTRDQXyJsn1NYF8SedPr3qYV7nMswh7l5seoTG6XNTzw41ScPx4yLped6OqdILpilj8Tad1I7Nl_1HP3Gum8hpn6_axWXayBAD3b31wgiyOnIcX4DTA3gKLQJqY"
+                                style="background-color: #fdba74;" />
+                            <div>
+                                <h4 class="font-medium text-text-main-light dark:text-text-main-dark text-sm">Luxury Bag
+                                </h4>
+                                <p class="text-text-muted-light dark:text-text-muted-dark text-xs">Alibaba</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="text-right">
+                                <p class="font-bold text-base text-text-main-light dark:text-text-main-dark">$245</p>
+                                <p class="text-accent-green text-xs font-medium">39% less</p>
+                            </div>
+                            <button
+                                class="text-text-muted-light dark:text-text-muted-dark hover:bg-gray-100 dark:hover:bg-gray-800 p-1.5 rounded-lg transition-colors">
+                                <span class="material-icons text-[20px]">bookmark_border</span>
+                            </button>
+                        </div>
+                    </div>
+                    <hr class="border-gray-100 dark:border-gray-800" />
+                    <div class="flex items-center justify-between group">
+                        <div class="flex items-center gap-4">
+                            <img alt="Luxury bag alternative"
+                                class="w-12 h-12 rounded-xl object-cover mix-blend-multiply opacity-90 group-hover:opacity-100 transition-opacity"
+                                src="https://lh3.googleusercontent.com/aida-public/AB6AXuCDBbIg3y-S0Bi1JkBZ67GRoY_Ju2RLAzfiuP5dNarbFknr5YwSPSXV45dS8QjBfnaY8LfUXoAOMooWOzdpCU9UjtSYeNH_JCP2AyidHmJ27kwIGHp_BOyDZp5oxw7YB6txYeNOr1R0K_yVoTjsLOA6GYQN9gjBaNqUrm7VfKSW_Ro8wK6FfnkpV4-okgUXrDF8LBdmjDWEuf_nAWS10ucLms9xnIRfgRCWN4DjLMSiU6A9LKIRmOdj0VVOXfcOzAHr0u-jwjpCH4uQ"
+                                style="background-color: #93c5fd;" />
+                            <div>
+                                <h4 class="font-medium text-text-main-light dark:text-text-main-dark text-sm">Luxury Bag
+                                </h4>
+                                <p class="text-text-muted-light dark:text-text-muted-dark text-xs">eBay</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="text-right">
+                                <p class="font-bold text-base text-text-main-light dark:text-text-main-dark">$299</p>
+                                <p class="text-accent-green text-xs font-medium">25% less</p>
+                            </div>
+                            <button
+                                class="text-text-muted-light dark:text-text-muted-dark hover:bg-gray-100 dark:hover:bg-gray-800 p-1.5 rounded-lg transition-colors">
+                                <span class="material-icons text-[20px]">bookmark_border</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+        <div
+            class="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-background-light via-background-light to-transparent dark:from-background-dark dark:via-background-dark pt-8 border-t border-gray-100 dark:border-gray-800 backdrop-blur-sm bg-opacity-90 dark:bg-opacity-90">
+            <button
+                class="w-full bg-[#b44800] hover:bg-primary-dark text-white font-semibold py-3.5 px-6 rounded-xl flex items-center justify-center gap-2 shadow-lg transition-transform active:scale-[0.98]">
+                <span>Chat Now</span>
+                <span class="material-icons text-[20px]">chat</span>
+            </button>
+        </div>
+    </div>
+
+</body>
+
+</html>

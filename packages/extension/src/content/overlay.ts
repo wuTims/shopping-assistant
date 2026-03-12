@@ -146,9 +146,7 @@ function hideOverlay(): void {
   }
 }
 
-function attachOverlay(img: HTMLImageElement): void {
-  if (img.dataset.shoppingAssistantBound) return;
-  if (img.naturalWidth < MIN_IMAGE_SIZE_PX || img.naturalHeight < MIN_IMAGE_SIZE_PX) return;
+function bindOverlayEvents(img: HTMLImageElement): void {
   img.dataset.shoppingAssistantBound = "1";
 
   img.addEventListener("mouseenter", () => showOverlay(img));
@@ -162,6 +160,35 @@ function attachOverlay(img: HTMLImageElement): void {
   });
 }
 
+/** Check if the image is visually large enough for an overlay using displayed size. */
+function isImageLargeEnough(img: HTMLImageElement): boolean {
+  // Use displayed size (offsetWidth/offsetHeight) — this works even when
+  // the src is a tiny placeholder but CSS sizes the element to full size.
+  const w = img.offsetWidth || img.naturalWidth;
+  const h = img.offsetHeight || img.naturalHeight;
+  return w >= MIN_IMAGE_SIZE_PX && h >= MIN_IMAGE_SIZE_PX;
+}
+
+function attachOverlay(img: HTMLImageElement): void {
+  if (img.dataset.shoppingAssistantBound) return;
+
+  // Image has dimensions (loaded or CSS-sized) — check size
+  if (img.offsetWidth > 0 || img.naturalWidth > 0) {
+    if (!isImageLargeEnough(img)) return;
+    bindOverlayEvents(img);
+    return;
+  }
+
+  // Image not yet loaded / no layout — wait for load event
+  if (!img.complete) {
+    img.addEventListener("load", () => {
+      if (img.dataset.shoppingAssistantBound) return;
+      if (!isImageLargeEnough(img)) return;
+      bindOverlayEvents(img);
+    }, { once: true });
+  }
+}
+
 export function initOverlays(): void {
   const imgs = document.querySelectorAll<HTMLImageElement>("img");
   for (const img of imgs) {
@@ -170,6 +197,7 @@ export function initOverlays(): void {
 
   const observer = new MutationObserver((mutations) => {
     for (const mutation of mutations) {
+      // Handle new nodes added to the DOM
       for (const node of mutation.addedNodes) {
         if (node instanceof HTMLImageElement) {
           attachOverlay(node);
@@ -180,8 +208,24 @@ export function initOverlays(): void {
           }
         }
       }
+
+      // Handle lazy-loaded images: src/srcset attribute changes on existing <img>
+      if (
+        mutation.type === "attributes" &&
+        mutation.target instanceof HTMLImageElement
+      ) {
+        const img = mutation.target;
+        // Reset bound state so attachOverlay re-evaluates with the new src
+        delete img.dataset.shoppingAssistantBound;
+        attachOverlay(img);
+      }
     }
   });
 
-  observer.observe(document.body, { childList: true, subtree: true });
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["src", "srcset"],
+  });
 }
