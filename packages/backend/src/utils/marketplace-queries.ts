@@ -1,5 +1,4 @@
 const TARGET_MARKETPLACES = [
-  "aliexpress.com",
   "dhgate.com",
   "temu.com",
   "1688.com",
