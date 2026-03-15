@@ -6,12 +6,13 @@ import {
   MAX_PRICE_FALLBACK_RESULTS,
   PRICE_FALLBACK_TIMEOUT_MS,
   EMBEDDING_TIMEOUT_MS,
+  MIN_CONFIDENCE_SCORE,
 } from "@shopping-assistant/shared";
 import {
   identifyProduct,
 } from "../services/gemini.js";
 import type { FetchedImage } from "../services/gemini.js";
-import { searchProducts } from "../services/brave.js";
+import { searchProducts, searchImages } from "../services/brave.js";
 import { searchAliExpress } from "../services/aliexpress.js";
 import { fillMissingPrices } from "../services/price-fallback.js";
 import { generateMarketplaceQueries } from "../utils/marketplace-queries.js";
@@ -52,6 +53,9 @@ searchRoute.post("/", async (c) => {
   const remaining = () => SEARCH_TIMEOUT_MS - (Date.now() - searchStart);
 
   console.log(`[search:${requestId}] Request for: ${body.title ?? body.imageUrl ?? "(base64 image)"}`);
+  console.log(`[search:${requestId}] Source URL: ${body.sourceUrl}`);
+  console.log(`[search:${requestId}] Has image: base64=${!!body.imageBase64}, url=${!!body.imageUrl}`);
+  if (body.price != null) console.log(`[search:${requestId}] Original price: ${body.currency ?? ""}${body.price}`);
 
   // Hard request-level timeout — safety net to prevent unbounded latency
   const abortController = new AbortController();
@@ -68,6 +72,7 @@ searchRoute.post("/", async (c) => {
     : body.imageUrl!;
 
   const titleQueries = buildTitleQueries(body.title, body.sourceUrl);
+  console.log(`[search:${requestId}] Title queries: ${JSON.stringify(titleQueries)}`);
 
   // Always kick off title Brave search in parallel
   const titleBravePromise = titleQueries.length > 0
@@ -138,13 +143,22 @@ searchRoute.post("/", async (c) => {
 
   const skipAiBrave = !hasNewQueries(aiQueries, titleQueries);
 
+  console.log(`[search:${requestId}] AI queries: ${JSON.stringify(aiQueries)}`);
+  console.log(`[search:${requestId}] Marketplace queries: ${JSON.stringify(marketplaceQueries)}`);
+  console.log(`[search:${requestId}] Skip AI Brave (same as title): ${skipAiBrave}`);
+
   // Prepare AliExpress search — use AI queries + image for visual search
   const aliExpressImage: FetchedImage | null = body.imageBase64
     ? { data: body.imageBase64, mimeType: "image/png" }
-    : null;
+    : originalImage;
   const aliExpressQueries = [identification.description || body.title || ""].filter(Boolean);
+  console.log(`[search:${requestId}] AliExpress queries: ${JSON.stringify(aliExpressQueries)}, hasImage: ${!!aliExpressImage}`);
 
-  const [aiBraveResult, marketplaceBraveResult, aliExpressResult] =
+  // Image search queries — use concise AI queries for best image results
+  const imageSearchQueries = aiQueries.slice(0, 2);
+  console.log(`[search:${requestId}] Image search queries: ${JSON.stringify(imageSearchQueries)}`);
+
+  const [aiBraveResult, marketplaceBraveResult, aliExpressResult, imageBraveResult] =
     await Promise.allSettled([
       skipAiBrave
         ? Promise.resolve(emptyProviderOutcome())
@@ -154,6 +168,9 @@ searchRoute.post("/", async (c) => {
         : Promise.resolve(emptyProviderOutcome()),
       aliExpressQueries.length > 0
         ? withTimeout(searchAliExpress(aliExpressQueries, aliExpressImage), phase2Deadline)
+        : Promise.resolve(emptyProviderOutcome()),
+      imageSearchQueries.length > 0
+        ? withTimeout(searchImages(imageSearchQueries), phase2Deadline)
         : Promise.resolve(emptyProviderOutcome()),
     ]);
 
@@ -181,10 +198,22 @@ searchRoute.post("/", async (c) => {
     console.error(`[search:${requestId}] AliExpress failed:`, aliExpressResult.reason);
   }
 
+  const imageBraveOutcome: ProviderSearchOutcome =
+    imageBraveResult.status === "fulfilled"
+      ? imageBraveResult.value
+      : rejectedProviderOutcome(imageSearchQueries.length, imageBraveResult.reason);
+
+  if (imageBraveResult.status === "rejected") {
+    console.error(`[search:${requestId}] Brave (image) failed:`, imageBraveResult.reason);
+  }
+
   // Combine brave outcomes
   const braveOutcome = combineBraveOutcomes(
-    combineBraveOutcomes(titleBraveOutcome, aiBraveOutcome),
-    marketplaceBraveOutcome,
+    combineBraveOutcomes(
+      combineBraveOutcomes(titleBraveOutcome, aiBraveOutcome),
+      marketplaceBraveOutcome,
+    ),
+    imageBraveOutcome,
   );
 
   // Check if request was aborted during Phase 2
@@ -200,11 +229,15 @@ searchRoute.post("/", async (c) => {
   const preSorted = heuristicPreSort(deduped, identification, body.price);
   const capped = preSorted.slice(0, MAX_RESULTS_FOR_RANKING);
 
-  if (aliExpressOutcome.results.length > 0) {
-    console.log(`[search:${requestId}] AliExpress contributed ${aliExpressOutcome.results.length} results`);
-  }
+  // ── Source attribution logging ──────────────────────────────────────────
+  console.log(`[search:${requestId}] Source breakdown: Brave(title)=${titleBraveOutcome.results.length}, Brave(AI)=${aiBraveOutcome.results.length}, Brave(marketplace)=${marketplaceBraveOutcome.results.length}, Brave(image)=${imageBraveOutcome.results.length}, AliExpress=${aliExpressOutcome.results.length}`);
 
   console.log(`[search:${requestId}] Results: ${allResults.length} raw → ${deduped.length} deduped → ${capped.length} capped`);
+
+  // Log top capped results for debugging
+  for (const r of capped.slice(0, 10)) {
+    console.log(`[search:${requestId}]   [${r.source}] "${r.title.slice(0, 80)}" price=${r.price ?? "N/A"} url=${r.productUrl.slice(0, 100)}`);
+  }
 
   // ── Phase 3.5: price fallback — screenshot + Gemini Vision for top results missing prices ──
   if (remaining() > PRICE_FALLBACK_TIMEOUT_MS + 2000) {
@@ -262,7 +295,26 @@ searchRoute.post("/", async (c) => {
   const rankingStatus: "ok" | "fallback" = "ok";
   const rankingFailureReason: string | null = null;
 
+  // Log score breakdown for top results
+  const hasVisual = Object.keys(visualScores).length > 0;
+  console.log(`[search:${requestId}] Scoring: mode=${hasVisual ? "blended (text+visual)" : "text-only"}`);
+  for (const r of capped.slice(0, 10)) {
+    const ts = textScores[r.id] ?? 0;
+    const vs = visualScores[r.id];
+    const final = scores[r.id] ?? 0;
+    const parts = [`text=${ts.toFixed(3)}`];
+    if (vs !== undefined) parts.push(`visual=${vs.toFixed(3)}`);
+    parts.push(`final=${final.toFixed(3)}`);
+    console.log(`[search:${requestId}]   Score [${r.id}] "${r.title.slice(0, 60)}": ${parts.join(", ")}`);
+  }
+
   const ranked = applyRanking(capped, scores, body.price);
+
+  // Log filtered results
+  const filtered = capped.length - ranked.length;
+  if (filtered > 0) {
+    console.log(`[search:${requestId}] Filtered ${filtered} results below MIN_CONFIDENCE_SCORE (${MIN_CONFIDENCE_SCORE})`);
+  }
 
   // ── Build response ────────────────────────────────────────────────────────
 
@@ -304,6 +356,16 @@ searchRoute.post("/", async (c) => {
       rankingFailureReason,
     },
   };
+
+  // Log final ranked results
+  console.log(`[search:${requestId}] Final ranked results (${ranked.length}):`);
+  for (const r of ranked.slice(0, 10)) {
+    console.log(
+      `[search:${requestId}]   #${r.rank} [${r.confidence}/${(r.confidenceScore * 100).toFixed(0)}%] ` +
+      `"${r.result.title.slice(0, 60)}" ${r.result.price != null ? `${r.result.currency ?? "$"}${r.result.price}` : "no price"} ` +
+      `(${r.result.marketplace}) ${r.comparisonNotes}`,
+    );
+  }
 
   console.log(`[search:${requestId}] Complete: ${ranked.length} results in ${response.searchMeta.searchDurationMs}ms`);
   return c.json(response);
