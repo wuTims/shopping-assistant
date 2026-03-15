@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { SearchResult } from "@shopping-assistant/shared";
 import { extractMarketplace, isKnownMarketplaceDomain } from "../utils/marketplace.js";
 import { isLikelyTimeoutError } from "../utils/errors.js";
@@ -5,6 +6,7 @@ import type { ProviderSearchOutcome } from "./provider-outcome.js";
 import { resolveProviderStatus } from "./provider-outcome.js";
 
 const BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search";
+const BRAVE_IMAGE_API_URL = "https://api.search.brave.com/res/v1/images/search";
 const BRAVE_API_KEY = process.env.BRAVE_API_KEY!;
 const PER_QUERY_TIMEOUT_MS = 8_000;
 
@@ -57,6 +59,9 @@ export async function searchProducts(queries: string[]): Promise<ProviderSearchO
       const data = (await res.json()) as BraveSearchResponse;
       const webResults = data.web?.results ?? [];
       const queryResults: SearchResult[] = [];
+      const productClusterCount = webResults.filter((r) => r.product_cluster?.length).length;
+      const shoppingDomainCount = webResults.filter((r) => !r.product_cluster?.length && isShoppingDomain(r.url)).length;
+      console.log(`[brave] Query "${query.slice(0, 80)}": ${webResults.length} web results, ${productClusterCount} with product clusters, ${shoppingDomainCount} shopping domain hits`);
 
       for (const item of webResults) {
         if (item.product_cluster?.length) {
@@ -170,4 +175,45 @@ function parsePriceFromSnippets(item: BraveWebResult): { price: number | null; c
   }
   return { price: null, currency: null };
 }
+
+// ── Brave Image Search ──────────────────────────────────────────────────────
+
+interface BraveImageResult {
+  url: string;
+  title: string;
+  properties?: { url?: string; placeholder?: string };
+  thumbnail?: { src: string };
+}
+
+interface BraveImageSearchResponse {
+  results?: BraveImageResult[];
+}
+
+export function normalizeBraveImageResults(data: unknown): SearchResult[] {
+  const root = data as BraveImageSearchResponse | null;
+  const items = root?.results;
+  if (!items || !Array.isArray(items) || items.length === 0) return [];
+
+  const results: SearchResult[] = [];
+  for (const item of items) {
+    if (!item.url || !isShoppingDomain(item.url)) continue;
+
+    const parsed = parsePrice(item.title ?? null);
+    results.push({
+      id: `brave_img_${randomUUID().slice(0, 8)}`,
+      source: "brave",
+      title: item.title ?? "",
+      price: parsed.price,
+      currency: parsed.currency,
+      imageUrl: item.thumbnail?.src ?? item.properties?.placeholder ?? item.properties?.url ?? null,
+      productUrl: item.url,
+      marketplace: extractMarketplace(item.url),
+      snippet: null,
+      structuredData: null,
+      raw: { braveImageResult: item },
+    });
+  }
+  return results;
+}
+
 
