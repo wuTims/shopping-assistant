@@ -1,9 +1,12 @@
 # Result Grading Design
 
 **Date:** 2026-03-15
-**Status:** Approved
+**Goal:** Return the most exact product matches first, using Gemini as a structured grading layer while keeping deterministic safeguards around obvious mismatches and fallback behavior.
+**Approach:** Add a dedicated grading pipeline after candidate collection: normalize results, compare source-vs-candidate attributes, ask Gemini for a structured match judgment, then enforce strict tiered selection rules.
 
-## Context
+---
+
+## Summary
 
 The current backend search pipeline identifies a source product, gathers marketplace candidates, and ranks them for the side panel. The next iteration needs a stricter grading stage that prioritizes returning the same product the user is viewing over returning the cheapest similar item.
 
@@ -11,26 +14,12 @@ The main product requirement is conservative matching. A candidate should only b
 
 This design keeps Gemini deeply involved in grading while preserving deterministic guardrails around obvious mismatches and output policy.
 
-## Goals
-
-- Maximize exact product matches in returned results
-- Use both textual/structured attributes and visual evidence during grading
-- Keep variant handling conservative, with category-aware treatment when possible
-- Allow fallback results when exact matches are unavailable, but label them clearly
-- Make grading behavior explainable and testable
-
-## Non-Goals
-
-- Building a provider-specific integration for dropshipping APIs
-- Redesigning the side panel UI beyond any labels needed for confidence tiers
-- Introducing user accounts, persistence, or a database
-- Solving category-specific grading for every retail vertical in v1
-
-## Recommended Approach
-
-Use a hybrid grading pipeline with deterministic pre-filtering plus Gemini as the final evaluator.
-
-This approach keeps the backend in control of normalization, obvious contradiction checks, and output policy, while assigning the core product-match judgment to Gemini. It is stricter and easier to debug than a pure LLM judge, but more capable than rules-only matching when marketplace listings are incomplete or noisy.
+**Decisions made:**
+- Exact product matching outranks price savings
+- Gemini should be more involved than the current ranking stage, but inside a bounded structured pipeline
+- Textual/structured attributes and image evidence both matter for grading
+- Variant differences should be handled conservatively, with room for lightweight category-aware rules later
+- Lower-confidence variants can appear as fallback results, but must never outrank strong exact matches
 
 ## Alternatives Considered
 
@@ -46,7 +35,13 @@ Build a deterministic score from normalized title, brand, model, variant, quanti
 
 **Why not chosen:** Predictable, but too brittle for inconsistent marketplace metadata and weak when image evidence is needed.
 
-## Architecture
+### Recommended direction
+
+Use a hybrid grading pipeline with deterministic pre-filtering plus Gemini as the final evaluator.
+
+This approach keeps the backend in control of normalization, obvious contradiction checks, and output policy, while assigning the core product-match judgment to Gemini. It is stricter and easier to debug than a pure LLM judge, but more capable than rules-only matching when marketplace listings are incomplete or noisy.
+
+## Section 1: Grading Pipeline Architecture
 
 The grading stage becomes a dedicated backend pipeline that starts after candidate collection and before the final search response is returned.
 
@@ -133,7 +128,7 @@ POST /search
   -> return exact matches first, fallback variants second
 ```
 
-## Grading Policy
+## Section 2: Grading Policy
 
 The system should answer one question in order: "Can this candidate be trusted as the same product the user is viewing?"
 
@@ -185,7 +180,7 @@ Examples of likely soft differences:
 - packaging revisions
 - minor listing-title wording differences
 
-## Error Handling
+## Section 3: Error Handling
 
 If Gemini grading fails, times out, or returns malformed structured output, the backend must not silently degrade to naive price sorting.
 
@@ -198,7 +193,7 @@ Fallback behavior should be:
 
 If key candidate evidence is missing, such as image URLs or extractable attributes, the grader should continue when possible but lower confidence accordingly.
 
-## Testing Strategy
+## Section 4: Testing Strategy
 
 Testing should focus on ranking behavior and grading correctness, not just isolated helper functions.
 
@@ -232,7 +227,7 @@ Expected assertions:
 - obvious mismatches do not surface
 - degraded mode is labeled and remains conservative
 
-## File Impact
+## Section 5: File Impact
 
 This design likely affects:
 
