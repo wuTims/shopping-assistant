@@ -82,7 +82,7 @@ export interface ProductIdentification {
 
 export interface SearchResult {
   id: string;
-  source: "gemini_grounding" | "brave";
+  source: "gemini_grounding" | "brave" | "aliexpress";
   title: string;
   price: number | null;
   currency: string | null;
