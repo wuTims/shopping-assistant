@@ -189,18 +189,6 @@ export function heuristicPreSort(
   return scored.map((s) => s.result);
 }
 
-// ── selectImageCandidates ───────────────────────────────────────────────────
-
-export function selectImageCandidates(sortedResults: SearchResult[], maxImages = 5): SearchResult[] {
-  const candidates: SearchResult[] = [];
-  for (const r of sortedResults) {
-    if (r.imageUrl && candidates.length < maxImages) {
-      candidates.push(r);
-    }
-  }
-  return candidates;
-}
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function normalizeUrl(url: string): string {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { SearchResult, ProductIdentification } from "@shopping-assistant/shared";
-import { mergeAndDedup, applyRanking, buildFallbackScores, heuristicPreSort, selectImageCandidates } from "../ranking.js";
+import { mergeAndDedup, applyRanking, buildFallbackScores, heuristicPreSort } from "../ranking.js";
 
 function makeResult(overrides: Partial<SearchResult> = {}): SearchResult {
   return {
@@ -244,46 +244,3 @@ describe("heuristicPreSort", () => {
   });
 });
 
-describe("selectImageCandidates", () => {
-  it("returns empty for results without images", () => {
-    const results = [
-      makeResult({ id: "a", imageUrl: null }),
-      makeResult({ id: "b", imageUrl: null }),
-    ];
-    expect(selectImageCandidates(results)).toEqual([]);
-  });
-
-  it("selects only results with imageUrl", () => {
-    const results = [
-      makeResult({ id: "a", imageUrl: null }),
-      makeResult({ id: "b", imageUrl: "https://img.com/b.jpg" }),
-      makeResult({ id: "c", imageUrl: "https://img.com/c.jpg" }),
-    ];
-    const candidates = selectImageCandidates(results);
-    expect(candidates).toHaveLength(2);
-    expect(candidates[0].id).toBe("b");
-    expect(candidates[1].id).toBe("c");
-  });
-
-  it("respects maxImages limit", () => {
-    const results = [
-      makeResult({ id: "a", imageUrl: "https://img.com/a.jpg" }),
-      makeResult({ id: "b", imageUrl: "https://img.com/b.jpg" }),
-      makeResult({ id: "c", imageUrl: "https://img.com/c.jpg" }),
-    ];
-    const candidates = selectImageCandidates(results, 2);
-    expect(candidates).toHaveLength(2);
-    expect(candidates[0].id).toBe("a");
-    expect(candidates[1].id).toBe("b");
-  });
-
-  it("preserves sorted order from input", () => {
-    const results = [
-      makeResult({ id: "c", imageUrl: "https://img.com/c.jpg" }),
-      makeResult({ id: "a", imageUrl: "https://img.com/a.jpg" }),
-      makeResult({ id: "b", imageUrl: null }),
-    ];
-    const candidates = selectImageCandidates(results, 5);
-    expect(candidates.map((c) => c.id)).toEqual(["c", "a"]);
-  });
-});
