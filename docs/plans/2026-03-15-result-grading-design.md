@@ -236,10 +236,10 @@ Expected assertions:
 
 This design likely affects:
 
-- backend ranking services in [packages/backend/src/services/ranking.ts](C:\dev\repos\shopping-assistant\packages\backend\src\services\ranking.ts)
-- provider outcome shaping in [packages/backend/src/services/provider-outcome.ts](C:\dev\repos\shopping-assistant\packages\backend\src\services\provider-outcome.ts)
-- Gemini grading logic in [packages/backend/src/services/gemini.ts](C:\dev\repos\shopping-assistant\packages\backend\src\services\gemini.ts)
-- shared grading types in [packages/shared/src/types.ts](C:\dev\repos\shopping-assistant\packages\shared\src\types.ts)
+- `packages/backend/src/services/ranking.ts`
+- `packages/backend/src/services/provider-outcome.ts`
+- `packages/backend/src/services/gemini.ts`
+- `packages/shared/src/types.ts`
 
 The implementation plan should confirm whether these responsibilities stay in existing files or get split into smaller grading-focused units.
 
