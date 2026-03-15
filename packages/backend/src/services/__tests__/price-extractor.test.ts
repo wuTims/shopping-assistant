@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { extractPriceFromHtml } from "../price-extractor.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { extractPriceFromHtml, fetchAndExtractPrice } from "../price-extractor.js";
 
 describe("extractPriceFromHtml", () => {
   describe("JSON-LD extraction", () => {
@@ -85,5 +85,38 @@ describe("extractPriceFromHtml", () => {
       const html = `<html><body><p>Hello world</p></body></html>`;
       expect(extractPriceFromHtml(html)).toEqual({ price: null, currency: null });
     });
+  });
+});
+
+describe("fetchAndExtractPrice", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("extracts price from fetched HTML with JSON-LD", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: () => Promise.resolve(`<html><head>
+        <script type="application/ld+json">
+        {"@type":"Product","offers":{"price":"49.99","priceCurrency":"USD"}}
+        </script></head><body></body></html>`),
+    });
+
+    const result = await fetchAndExtractPrice("https://example.com/product");
+    expect(result).toEqual({ price: 49.99, currency: "USD" });
+  });
+
+  it("returns null for non-ok response", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 403 });
+    const result = await fetchAndExtractPrice("https://example.com/blocked");
+    expect(result).toEqual({ price: null, currency: null });
+  });
+
+  it("returns null on fetch error", async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new Error("network error"));
+    const result = await fetchAndExtractPrice("https://example.com/down");
+    expect(result).toEqual({ price: null, currency: null });
   });
 });

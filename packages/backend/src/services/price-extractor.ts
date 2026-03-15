@@ -1,3 +1,31 @@
+import { PRICE_HTTP_TIMEOUT_MS } from "@shopping-assistant/shared";
+
+const FETCH_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+/** Fetch a URL via lightweight HTTP and extract price from structured data in HTML. */
+export async function fetchAndExtractPrice(
+  url: string,
+): Promise<{ price: number | null; currency: string | null }> {
+  try {
+    const res = await fetch(url, {
+      headers: {
+        "User-Agent": FETCH_USER_AGENT,
+        "Accept": "text/html",
+      },
+      signal: AbortSignal.timeout(PRICE_HTTP_TIMEOUT_MS),
+      redirect: "follow",
+    });
+
+    if (!res.ok) return { price: null, currency: null };
+
+    const html = await res.text();
+    return extractPriceFromHtml(html);
+  } catch {
+    return { price: null, currency: null };
+  }
+}
+
 /** Extract price from raw HTML using structured data (no JS rendering needed). */
 export function extractPriceFromHtml(
   html: string,
