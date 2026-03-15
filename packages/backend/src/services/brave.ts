@@ -216,4 +216,61 @@ export function normalizeBraveImageResults(data: unknown): SearchResult[] {
   return results;
 }
 
+export async function searchImages(queries: string[]): Promise<ProviderSearchOutcome> {
+  const outcomes = await Promise.allSettled(
+    queries.map(async (query) => {
+      const url = new URL(BRAVE_IMAGE_API_URL);
+      url.searchParams.set("q", query);
+      url.searchParams.set("count", "20");
+      url.searchParams.set("safesearch", "strict");
+      url.searchParams.set("search_lang", "en");
+      url.searchParams.set("country", "US");
 
+      const res = await fetch(url.toString(), {
+        headers: {
+          "Accept": "application/json",
+          "Accept-Encoding": "gzip",
+          "X-Subscription-Token": BRAVE_API_KEY,
+        },
+        signal: AbortSignal.timeout(PER_QUERY_TIMEOUT_MS),
+      });
+
+      if (!res.ok) {
+        throw new Error(`Brave image search failed: ${res.status} ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      const imageResults = normalizeBraveImageResults(data);
+      console.log(`[brave-img] Query "${query.slice(0, 80)}": ${(data as BraveImageSearchResponse).results?.length ?? 0} raw images, ${imageResults.length} shopping domain hits`);
+      return imageResults;
+    }),
+  );
+
+  const results: SearchResult[] = [];
+  let successfulQueries = 0;
+  let failedQueries = 0;
+  let timedOutQueries = 0;
+
+  for (let i = 0; i < outcomes.length; i++) {
+    const outcome = outcomes[i];
+    if (outcome.status === "fulfilled") {
+      results.push(...outcome.value);
+      successfulQueries++;
+    } else {
+      console.error(`[brave-img] Error for "${queries[i]}":`, outcome.reason);
+      failedQueries++;
+      if (isLikelyTimeoutError(outcome.reason)) {
+        timedOutQueries++;
+      }
+    }
+  }
+
+  return {
+    results,
+    status: resolveProviderStatus(successfulQueries, failedQueries, timedOutQueries),
+    totalQueries: queries.length,
+    successfulQueries,
+    failedQueries,
+    timedOutQueries,
+  };
+}
