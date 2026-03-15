@@ -18,8 +18,11 @@ export const CONFIDENCE_THRESHOLDS = {
 export const MIN_CONFIDENCE_SCORE = 0.15;
 
 export const MAX_RESULTS_FOR_RANKING = 15;
-export const MAX_IMAGES_FOR_RANKING = 5;
-export const RANKING_IMAGE_TIMEOUT_MS = 3_000;
+
+export const EMBEDDING_TIMEOUT_MS = 6_000;
+export const MAX_IMAGES_FOR_EMBEDDING = 8;
+export const VISUAL_SCORE_WEIGHT = 0.4;
+export const TEXT_SCORE_WEIGHT = 0.6;
 
 export const OVERLAY_ICON_SIZE_PX = 28;
 export const OVERLAY_ICON_HOVER_SIZE_PX = 32;
