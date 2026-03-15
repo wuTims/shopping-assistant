@@ -5,6 +5,7 @@ import {
   MAX_RESULTS_FOR_RANKING,
   MAX_PRICE_FALLBACK_RESULTS,
   PRICE_FALLBACK_TIMEOUT_MS,
+  EMBEDDING_TIMEOUT_MS,
 } from "@shopping-assistant/shared";
 import {
   identifyProduct,
@@ -21,6 +22,7 @@ import {
   buildFallbackScores,
   heuristicPreSort,
 } from "../services/ranking.js";
+import { computeVisualSimilarityScores, blendScores } from "../services/embedding.js";
 
 export const searchRoute = new Hono();
 
@@ -73,6 +75,7 @@ searchRoute.post("/", async (c) => {
     : Promise.resolve(emptyProviderOutcome());
 
   let identification: ProductIdentification;
+  let originalImage: FetchedImage | null = null;
 
   if (
     body.identification &&
@@ -83,12 +86,16 @@ searchRoute.post("/", async (c) => {
   ) {
     // Use pre-computed identification from /identify — skip redundant Gemini call
     identification = body.identification;
+    if (body.imageBase64) {
+      originalImage = { data: body.imageBase64, mimeType: "image/png" };
+    }
     console.log(`[search:${requestId}] Using provided identification: ${identification.category} — ${identification.description}`);
   } else {
     // No identification provided — identify from scratch (overlay click path)
     try {
       const result = await identifyProduct(imageSource, body.title);
       identification = result.identification;
+      originalImage = result.originalImage;
       console.log(`[search:${requestId}] Identified: ${identification.category} — ${identification.description}`);
     } catch (err) {
       console.error(`[search:${requestId}] Product identification failed:`, err);
@@ -226,10 +233,29 @@ searchRoute.post("/", async (c) => {
     return c.json({ error: "timeout", message: "Search request timed out", requestId }, 504);
   }
 
+  // ── Phase 3.75: embedding-based visual similarity ─────────────────────────
+  let visualScores: Record<string, number> = {};
+  if (originalImage && remaining() > EMBEDDING_TIMEOUT_MS + 1000) {
+    try {
+      visualScores = await withTimeout(
+        computeVisualSimilarityScores(originalImage, capped),
+        EMBEDDING_TIMEOUT_MS,
+      );
+      console.log(`[search:${requestId}] Embedding scored ${Object.keys(visualScores).length} results`);
+    } catch (err) {
+      console.warn(`[search:${requestId}] Embedding scoring failed:`, err);
+    }
+  } else {
+    console.log(`[search:${requestId}] Skipping embedding — ${originalImage ? "insufficient time" : "no original image"}`);
+  }
+
   // ── Phase 4: ranking ─────────────────────────────────────────────────────
 
   const rankStart = Date.now();
-  const scores = buildFallbackScores(capped, identification);
+  const textScores = buildFallbackScores(capped, identification);
+  const scores = Object.keys(visualScores).length > 0
+    ? blendScores(textScores, visualScores)
+    : textScores;
   const rankingDurationMs = Date.now() - rankStart;
   // Heuristic scoring is the sole ranking path (AI ranking removed in 362f16e).
   // "ok" means ranking completed successfully — the heuristic is the baseline.
