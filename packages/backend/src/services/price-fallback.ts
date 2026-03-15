@@ -1,6 +1,7 @@
 import { chromium, type Browser } from "playwright";
 import { ai, geminiModel as model } from "./ai-client.js";
 import { PRICE_NAV_TIMEOUT_MS } from "@shopping-assistant/shared";
+import { fetchAndExtractPrice } from "./price-extractor.js";
 
 let browser: Browser | null = null;
 let launching: Promise<Browser> | null = null;
@@ -20,6 +21,20 @@ async function getBrowser(): Promise<Browser> {
 export async function extractPriceFromUrl(
   url: string,
 ): Promise<{ price: number | null; currency: string | null }> {
+  // Strategy 1: Lightweight HTTP fetch + structured data (fast, no bot detection)
+  const httpResult = await fetchAndExtractPrice(url);
+  if (httpResult.price !== null) {
+    console.log(`[price-fallback] HTTP extraction succeeded for ${new URL(url).hostname}`);
+    return httpResult;
+  }
+
+  // Strategy 2: Playwright screenshot + Gemini Vision (slow, expensive, last resort)
+  return extractPriceViaPlaywright(url);
+}
+
+async function extractPriceViaPlaywright(
+  url: string,
+): Promise<{ price: number | null; currency: string | null }> {
   const b = await getBrowser();
   const context = await b.newContext({
     viewport: { width: 1280, height: 800 },
@@ -30,7 +45,6 @@ export async function extractPriceFromUrl(
 
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: PRICE_NAV_TIMEOUT_MS });
-    // Wait briefly for dynamic price rendering
     await page.waitForTimeout(500);
 
     const screenshot = await page.screenshot({ type: "png" });
@@ -69,7 +83,7 @@ export async function extractPriceFromUrl(
       currency: typeof parsed.currency === "string" ? parsed.currency : null,
     };
   } catch (err) {
-    console.error(`[price-fallback] Failed for ${url}:`, err);
+    console.error(`[price-fallback] Playwright failed for ${url}:`, err);
     return { price: null, currency: null };
   } finally {
     await context.close();
