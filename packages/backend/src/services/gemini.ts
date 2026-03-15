@@ -8,16 +8,6 @@ import { ai, geminiModel as model } from "./ai-client.js";
 import type { ProviderSearchOutcome } from "./provider-outcome.js";
 import { resolveProviderStatus } from "./provider-outcome.js";
 
-export class RankingOutputValidationError extends Error {
-  readonly details: string[];
-
-  constructor(message: string, details: string[] = []) {
-    super(message);
-    this.name = "RankingOutputValidationError";
-    this.details = details;
-  }
-}
-
 // ── identifyProduct ──────────────────────────────────────────────────────────
 
 export interface IdentifyProductResult {
@@ -239,85 +229,6 @@ export async function groundedSearch(queries: string[]): Promise<ProviderSearchO
   };
 }
 
-// ── rankResults ──────────────────────────────────────────────────────────────
-
-export interface RankResultsInput {
-  originalImage: FetchedImage;
-  results: SearchResult[];
-  resultImages: Map<string, FetchedImage>;
-  identification: ProductIdentification;
-}
-
-export async function rankResults(input: RankResultsInput): Promise<Record<string, number>> {
-  const { originalImage, results, resultImages, identification } = input;
-  if (results.length === 0) return {};
-  const resultIds = results.map((r) => r.id);
-
-  // Build content parts: original image + text descriptions of results (with images when available)
-  const contentParts: Array<
-    string | { inlineData: { mimeType: string; data: string } }
-  > = [];
-
-  contentParts.push({
-    inlineData: originalImage,
-  });
-
-  // Add result images inline
-  const resultIdsWithImages = new Set<string>();
-  for (const [id, img] of resultImages) {
-    contentParts.push({
-      inlineData: { mimeType: img.mimeType, data: img.data },
-    });
-    resultIdsWithImages.add(id);
-  }
-
-  // Build descriptions
-  const resultDescriptions: string[] = [];
-  for (const r of results) {
-    const hasImage = resultIdsWithImages.has(r.id);
-    const imageNote = hasImage
-      ? "(image provided above for visual comparison)"
-      : "(no image available — rank based on text similarity only)";
-
-    resultDescriptions.push(
-      `Result ${r.id}: "${r.title}" from ${r.marketplace}${r.price !== null ? ` — ${r.currency ?? "$"}${r.price}` : ""} ${imageNote}`,
-    );
-  }
-
-  const prompt = [
-    "You are a product comparison expert.",
-    `Original product: ${identification.description} (category: ${identification.category}, brand: ${identification.brand ?? "unknown"})`,
-    "The first image above is the original product. Any subsequent images are search results.",
-    "",
-    "Search results to rank:",
-    ...resultDescriptions,
-    "",
-    "Score each result from 0.0 to 1.0 based on how well it matches the original product.",
-    "Consider visual similarity (when images available), title relevance, brand match, and category match.",
-    "Return a JSON object mapping result IDs to scores.",
-  ].join("\n");
-
-  contentParts.push(prompt);
-
-  const response = await ai.models.generateContent({
-    model,
-    contents: contentParts,
-    config: {
-      responseMimeType: "application/json",
-      responseJsonSchema: {
-        type: Type.OBJECT,
-        description: "Map of result IDs to confidence scores (0.0 to 1.0)",
-        properties: Object.fromEntries(
-          resultIds.map((id) => [id, { type: Type.NUMBER }]),
-        ),
-        required: resultIds,
-      },
-    },
-  });
-
-  return parseAndValidateScores(response.text, resultIds);
-}
-
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 export interface FetchedImage {
@@ -445,61 +356,4 @@ function sniffImageMime(buf: Buffer): string {
   return "image/jpeg"; // last resort
 }
 
-function parseAndValidateScores(
-  rawResponse: string | undefined,
-  expectedIds: string[],
-): Record<string, number> {
-  if (!rawResponse || rawResponse.trim().length === 0) {
-    throw new RankingOutputValidationError("Ranking model returned an empty response body.");
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(rawResponse);
-  } catch (err) {
-    throw new RankingOutputValidationError("Ranking model returned invalid JSON.", [String(err)]);
-  }
-
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new RankingOutputValidationError("Ranking response is not a JSON object.");
-  }
-
-  const scoreMap = parsed as Record<string, unknown>;
-  const expected = new Set(expectedIds);
-  const missing: string[] = [];
-  const invalid: string[] = [];
-  const extra = Object.keys(scoreMap).filter((key) => !expected.has(key));
-  const validatedScores: Record<string, number> = {};
-
-  for (const id of expectedIds) {
-    if (!(id in scoreMap)) {
-      missing.push(id);
-      continue;
-    }
-
-    const value = scoreMap[id];
-    if (
-      typeof value !== "number" ||
-      Number.isNaN(value) ||
-      !Number.isFinite(value) ||
-      value < 0 ||
-      value > 1
-    ) {
-      invalid.push(`${id}:${String(value)}`);
-      continue;
-    }
-
-    validatedScores[id] = value;
-  }
-
-  if (missing.length > 0 || invalid.length > 0 || extra.length > 0) {
-    const details: string[] = [];
-    if (missing.length > 0) details.push(`missing IDs: ${missing.join(", ")}`);
-    if (invalid.length > 0) details.push(`invalid scores: ${invalid.join(", ")}`);
-    if (extra.length > 0) details.push(`unexpected IDs: ${extra.join(", ")}`);
-    throw new RankingOutputValidationError("Ranking response failed score-map validation.", details);
-  }
-
-  return validatedScores;
-}
 
