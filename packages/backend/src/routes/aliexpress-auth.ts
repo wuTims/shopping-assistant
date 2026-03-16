@@ -10,9 +10,13 @@ const APP_SECRET = process.env.ALIEXPRESS_API_KEY ?? "";
 const CALLBACK_URL = process.env.ALIEXPRESS_CALLBACK_URL ?? "";
 const OP_BASE_URL = "https://api-sg.aliexpress.com/rest";
 
-// Store refresh token in memory (same lifecycle as access token)
-let refreshToken = "";
-let refreshTokenExpiry = 0;
+// Restore refresh token from env (survives restarts)
+let refreshToken = process.env.ALIEXPRESS_REFRESH_TOKEN ?? "";
+let refreshTokenExpiry = Number(process.env.ALIEXPRESS_REFRESH_TOKEN_EXPIRY) || 0;
+
+// Auto-refresh: refresh 5 days before access token expires
+const REFRESH_BUFFER_MS = 5 * 24 * 60 * 60 * 1000;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const aliexpressAuthRoute = new Hono();
 
@@ -173,22 +177,27 @@ async function exchangeCodeForToken(code: string) {
   }
 
   // Activate the token in the aliexpress service
+  const tokenExpiryMs = Date.now() + expiresIn * 1000;
   setAccessToken(accessTokenValue, expiresIn);
 
   // Store refresh token
+  const refreshExpiryMs = Date.now() + refreshExpiresIn * 1000;
   if (refreshTokenValue) {
     refreshToken = refreshTokenValue;
-    refreshTokenExpiry = Date.now() + refreshExpiresIn * 1000;
+    refreshTokenExpiry = refreshExpiryMs;
   }
 
-  // Auto-persist to .env so token survives restarts
+  // Persist all tokens to .env so they survive restarts
   try {
-    persistTokenToEnv(accessTokenValue);
+    persistAllTokensToEnv(accessTokenValue, tokenExpiryMs, refreshTokenValue, refreshExpiryMs);
   } catch (e) {
-    console.warn("[aliexpress-auth] Failed to persist token to .env:", e);
+    console.warn("[aliexpress-auth] Failed to persist tokens to .env:", e);
   }
 
-  console.log(`[aliexpress-auth] Token acquired. Expires in ${Math.round(expiresIn / 3600)}h. Refresh token: ${refreshTokenValue ? "yes" : "no"}`);
+  // Schedule the next auto-refresh
+  scheduleTokenRefresh(tokenExpiryMs);
+
+  console.log(`[aliexpress-auth] Token acquired. Expires in ${Math.round(expiresIn / 86400)} days. Refresh token: ${refreshTokenValue ? "yes" : "no"}`);
 
   return {
     accessToken: accessTokenValue,
@@ -240,20 +249,98 @@ async function refreshAccessToken() {
     throw new Error(`Unexpected response: ${JSON.stringify(data)}`);
   }
 
+  const tokenExpiryMs = Date.now() + expiresIn * 1000;
   setAccessToken(accessTokenValue, expiresIn);
 
+  const refreshExpiryMs = Date.now() + refreshExpiresIn * 1000;
   if (newRefreshToken) {
     refreshToken = newRefreshToken;
-    refreshTokenExpiry = Date.now() + refreshExpiresIn * 1000;
+    refreshTokenExpiry = refreshExpiryMs;
   }
 
-  console.log(`[aliexpress-auth] Token refreshed. Expires in ${Math.round(expiresIn / 3600)}h`);
+  // Persist all tokens to .env
+  try {
+    persistAllTokensToEnv(accessTokenValue, tokenExpiryMs, newRefreshToken, refreshExpiryMs);
+  } catch (e) {
+    console.warn("[aliexpress-auth] Failed to persist refreshed tokens to .env:", e);
+  }
+
+  // Schedule the next auto-refresh
+  scheduleTokenRefresh(tokenExpiryMs);
+
+  console.log(`[aliexpress-auth] Token refreshed. Expires in ${Math.round(expiresIn / 86400)} days`);
 
   return {
     accessToken: accessTokenValue,
     expiresIn,
     refreshToken: newRefreshToken ?? null,
   };
+}
+
+// ── Auto-Refresh Scheduling ──────────────────────────────────────────────────
+
+function scheduleTokenRefresh(accessTokenExpiresAt: number): void {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+
+  if (!refreshToken || Date.now() >= refreshTokenExpiry) {
+    console.log("[aliexpress-auth] No valid refresh token — auto-refresh not scheduled");
+    return;
+  }
+
+  // Refresh 5 days before expiry, but at least 1 minute from now
+  const refreshAt = Math.max(
+    accessTokenExpiresAt - REFRESH_BUFFER_MS,
+    Date.now() + 60_000,
+  );
+  const delayMs = refreshAt - Date.now();
+  const delayDays = (delayMs / (24 * 60 * 60 * 1000)).toFixed(1);
+
+  console.log(`[aliexpress-auth] Auto-refresh scheduled in ${delayDays} days`);
+
+  refreshTimer = setTimeout(async () => {
+    console.log("[aliexpress-auth] Auto-refreshing token...");
+    try {
+      const result = await refreshAccessToken();
+      console.log(`[aliexpress-auth] Auto-refresh succeeded. New token expires in ${Math.round(result.expiresIn / 86400)} days`);
+    } catch (err) {
+      console.error("[aliexpress-auth] Auto-refresh failed:", err);
+      // Retry in 1 hour
+      console.log("[aliexpress-auth] Will retry in 1 hour");
+      refreshTimer = setTimeout(() => scheduleTokenRefresh(Date.now()), 60 * 60 * 1000);
+    }
+  }, delayMs);
+
+  // Don't let the timer keep the process alive
+  refreshTimer.unref();
+}
+
+/**
+ * Call on startup to restore token state and schedule auto-refresh.
+ */
+export function initAliExpressAutoRefresh(): void {
+  const tokenExpiry = Number(process.env.ALIEXPRESS_TOKEN_EXPIRY) || 0;
+  const hasToken = !!process.env.ALIEXPRESS_ACCESS_TOKEN;
+
+  if (!hasToken) {
+    console.log("[aliexpress-auth] No access token configured — skipping auto-refresh setup");
+    return;
+  }
+
+  if (tokenExpiry && Date.now() < tokenExpiry) {
+    const daysLeft = ((tokenExpiry - Date.now()) / (24 * 60 * 60 * 1000)).toFixed(1);
+    console.log(`[aliexpress-auth] Access token valid for ${daysLeft} more days`);
+    scheduleTokenRefresh(tokenExpiry);
+  } else if (refreshToken && Date.now() < refreshTokenExpiry) {
+    console.log("[aliexpress-auth] Access token expired but refresh token is valid — refreshing now");
+    refreshAccessToken().catch((err) => {
+      console.error("[aliexpress-auth] Startup refresh failed:", err);
+    });
+  } else {
+    console.log("[aliexpress-auth] No valid tokens — manual re-authorization required via GET /auth/aliexpress");
+  }
 }
 
 // ── .env Persistence ────────────────────────────────────────────────────────
@@ -264,19 +351,40 @@ function getEnvPath(): string {
   return resolve(currentDir, "..", "..", ".env");
 }
 
+function upsertEnvVar(content: string, key: string, value: string): string {
+  const pattern = new RegExp(`^${key}=.*$`, "m");
+  if (pattern.test(content)) {
+    return content.replace(pattern, `${key}=${value}`);
+  }
+  return content.trimEnd() + `\n${key}=${value}\n`;
+}
+
 function persistTokenToEnv(token: string): void {
   const envPath = getEnvPath();
   let content = readFileSync(envPath, "utf-8");
 
-  if (content.match(/^ALIEXPRESS_ACCESS_TOKEN=.*$/m)) {
-    content = content.replace(
-      /^ALIEXPRESS_ACCESS_TOKEN=.*$/m,
-      `ALIEXPRESS_ACCESS_TOKEN=${token}`,
-    );
-  } else {
-    content = content.trimEnd() + `\nALIEXPRESS_ACCESS_TOKEN=${token}\n`;
-  }
+  content = upsertEnvVar(content, "ALIEXPRESS_ACCESS_TOKEN", token);
 
   writeFileSync(envPath, content);
   console.log(`[aliexpress-auth] Token persisted to ${envPath}`);
+}
+
+function persistAllTokensToEnv(
+  accessTokenValue: string,
+  tokenExpiryMs: number,
+  refreshTokenValue: string | undefined,
+  refreshExpiryMs: number,
+): void {
+  const envPath = getEnvPath();
+  let content = readFileSync(envPath, "utf-8");
+
+  content = upsertEnvVar(content, "ALIEXPRESS_ACCESS_TOKEN", accessTokenValue);
+  content = upsertEnvVar(content, "ALIEXPRESS_TOKEN_EXPIRY", String(tokenExpiryMs));
+  if (refreshTokenValue) {
+    content = upsertEnvVar(content, "ALIEXPRESS_REFRESH_TOKEN", refreshTokenValue);
+    content = upsertEnvVar(content, "ALIEXPRESS_REFRESH_TOKEN_EXPIRY", String(refreshExpiryMs));
+  }
+
+  writeFileSync(envPath, content);
+  console.log(`[aliexpress-auth] All tokens persisted to ${envPath}`);
 }

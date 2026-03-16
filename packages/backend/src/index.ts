@@ -7,7 +7,7 @@ import { createNodeWebSocket } from "@hono/node-ws";
 import { searchRoute } from "./routes/search.js";
 import { chatRoute } from "./routes/chat.js";
 import identifyRoute from "./routes/identify.js";
-import { aliexpressAuthRoute } from "./routes/aliexpress-auth.js";
+import { aliexpressAuthRoute, initAliExpressAutoRefresh } from "./routes/aliexpress-auth.js";
 import { liveWebSocket } from "./ws/live.js";
 
 // Fail fast if required env vars are missing
@@ -56,3 +56,6 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
 });
 
 injectWebSocket(server);
+
+// Start AliExpress token auto-refresh (if tokens are configured)
+initAliExpressAutoRefresh();

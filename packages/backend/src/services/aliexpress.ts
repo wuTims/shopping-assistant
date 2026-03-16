@@ -10,9 +10,9 @@ const APP_KEY = process.env.ALIEXPRESS_APP_KEY ?? "";
 const APP_SECRET = process.env.ALIEXPRESS_API_KEY ?? "";
 const PER_QUERY_TIMEOUT_MS = 8_000;
 
-// Token state — bootstrap from env var, refresh via setAccessToken()
+// Token state — bootstrap from env, refresh via setAccessToken()
 let accessToken = process.env.ALIEXPRESS_ACCESS_TOKEN ?? "";
-let tokenExpiry = accessToken ? Date.now() + 24 * 60 * 60 * 1000 : 0;
+let tokenExpiry = Number(process.env.ALIEXPRESS_TOKEN_EXPIRY) || 0;
 
 export function setAccessToken(token: string, expiresInSeconds: number): void {
   accessToken = token;
