@@ -38,14 +38,26 @@ In production, secrets are managed via GCP Secret Manager. See [GCP Setup Guide]
 ## Build
 
 ```bash
-# 1. Install all workspace dependencies
 pnpm install
-
-# 2. Build all packages (shared types → extension → backend)
-pnpm build
 ```
 
-The extension build output will be at `packages/extension/dist/`.
+The extension has two build modes that control which backend it connects to:
+
+```bash
+# Local dev — points to http://localhost:8080 (from packages/extension/.env)
+pnpm build:ext:local
+
+# Production — points to Cloud Run URL (from packages/extension/.env.production)
+pnpm build:ext:prod
+```
+
+Both require shared types to be built first, which the scripts handle automatically. Output goes to `packages/extension/dist/`.
+
+To build everything (shared + extension + backend):
+
+```bash
+pnpm build
+```
 
 ## Load the Extension in Chrome
 
@@ -55,15 +67,17 @@ The extension build output will be at `packages/extension/dist/`.
 4. Select the `packages/extension/dist` folder
 5. The "Shopping Source Discovery" extension should now appear in your extensions list
 
-## Start the Backend
+> After switching between `build:ext:local` and `build:ext:prod`, click the reload button on the extension card in `chrome://extensions`.
 
-In a separate terminal, start the backend dev server:
+## Start the Backend (Local)
+
+Only needed when running the extension in local mode (`build:ext:local`):
 
 ```bash
 pnpm dev:backend
 ```
 
-The backend runs on `http://localhost:8080` by default.
+The backend runs on `http://localhost:8080` by default. If you built the extension with `build:ext:prod`, it talks to Cloud Run directly and no local backend is needed.
 
 ## Usage
 
@@ -72,6 +86,21 @@ The backend runs on `http://localhost:8080` by default.
 3. Click the overlay to search for cheaper alternatives across Brave Search and AliExpress
 4. Results appear in the side panel, ranked by visual similarity and price
 5. Ask follow-up questions via text chat or voice (Gemini Live API)
+
+## Production Backend
+
+The backend is live on GCP Cloud Run:
+
+```
+https://shopping-assistant-backend-636264173894.us-central1.run.app
+```
+
+Quick health check:
+
+```bash
+curl https://shopping-assistant-backend-636264173894.us-central1.run.app/health
+# {"status":"ok"}
+```
 
 ## Deployment
 
