@@ -6,6 +6,21 @@ import { ProductSection } from "./components/ProductSection";
 import { ResultCard } from "./components/ResultCard";
 import { useSidepanelState } from "./state/SidepanelStateContext";
 
+function openExternalUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return;
+    window.open(parsed.href, "_blank", "noopener");
+  } catch {
+    // Ignore malformed URLs
+  }
+}
+
+function truncateSavedLinkName(name: string, maxChars = 42) {
+  if (name.length <= maxChars) return name;
+  return `${name.slice(0, maxChars - 1)}…`;
+}
+
 function Shell({
   title,
   rightAction,
@@ -409,18 +424,33 @@ function SettingsRoute() {
             ) : (
               <div className="mt-3 space-y-2">
                 {savedLinks.map((link) => (
-                  <div key={link.id} className="flex items-center justify-between rounded-2xl bg-white/80 px-3 py-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-text-main">{link.name}</p>
+                  <div key={link.id} className="flex items-start gap-3 rounded-2xl bg-white/80 px-3 py-3">
+                    <div className="min-w-0 flex-1 pr-2">
+                      <button
+                        type="button"
+                        onClick={() => openExternalUrl(link.productUrl)}
+                        className="block w-full truncate text-left text-sm font-medium text-text-main hover:text-primary"
+                        aria-label={`Open ${link.name}`}
+                      >
+                        {truncateSavedLinkName(link.name)}
+                      </button>
                       <p className="text-xs text-text-muted">{link.marketplace}</p>
                     </div>
-                    <div className="ml-4 flex items-center gap-3">
-                      <span className="text-sm font-semibold text-primary">{link.priceLabel}</span>
+                    <div className="ml-auto flex shrink-0 items-center gap-2 self-center">
+                      <span className="shrink-0 text-sm font-semibold text-primary">{link.priceLabel}</span>
+                      <button
+                        type="button"
+                        onClick={() => openExternalUrl(link.productUrl)}
+                        aria-label={`Open ${link.name}`}
+                        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-text-main shadow-sm"
+                      >
+                        <span className="material-icons text-base">open_in_new</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => removeSavedLink(link.id)}
                         aria-label={`Remove ${link.name}`}
-                        className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-red-50 text-red-500"
+                        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-50 text-red-500"
                       >
                         <span className="material-icons text-base">delete</span>
                       </button>

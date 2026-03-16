@@ -10,6 +10,7 @@ export type VoiceStatus = "idle" | "connecting" | "recording" | "paused" | "erro
 export interface UseVoiceOptions {
   backendUrl: string;
   context: Record<string, unknown>;
+  onConversationCommit?: (turn: { inputTranscript: string; outputTranscript: string }) => void;
 }
 
 export interface UseVoiceReturn {
@@ -48,7 +49,7 @@ function base64ToFloat32(base64: string): Float32Array<ArrayBuffer> {
   return float32;
 }
 
-export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceReturn {
+export function useVoice({ backendUrl, context, onConversationCommit }: UseVoiceOptions): UseVoiceReturn {
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [inputTranscript, setInputTranscript] = useState("");
   const [outputTranscript, setOutputTranscript] = useState("");
@@ -64,6 +65,22 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const cleaningUpRef = useRef(false);
   const turnCompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputTranscriptRef = useRef("");
+  const outputTranscriptRef = useRef("");
+
+  const commitPendingConversation = useCallback(() => {
+    const nextInput = inputTranscriptRef.current.trim();
+    const nextOutput = outputTranscriptRef.current.trim();
+    if (!nextInput && !nextOutput) return;
+    onConversationCommit?.({
+      inputTranscript: nextInput,
+      outputTranscript: nextOutput,
+    });
+    inputTranscriptRef.current = "";
+    outputTranscriptRef.current = "";
+    setInputTranscript("");
+    setOutputTranscript("");
+  }, [onConversationCommit]);
 
   const stopCapture = useCallback(() => {
     workletNodeRef.current?.disconnect();
@@ -234,10 +251,12 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
             playAudioChunk(msg.data);
             break;
           case "input_transcript":
-            setInputTranscript((prev) => prev + msg.content);
+            inputTranscriptRef.current += msg.content;
+            setInputTranscript(inputTranscriptRef.current);
             break;
           case "output_transcript":
-            setOutputTranscript((prev) => prev + msg.content);
+            outputTranscriptRef.current += msg.content;
+            setOutputTranscript(outputTranscriptRef.current);
             break;
           case "interrupted":
             clearPlaybackQueue();
@@ -246,8 +265,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
             if (turnCompleteTimerRef.current) clearTimeout(turnCompleteTimerRef.current);
             turnCompleteTimerRef.current = setTimeout(() => {
               turnCompleteTimerRef.current = null;
-              setInputTranscript("");
-              setOutputTranscript("");
+              commitPendingConversation();
             }, 200);
             break;
           case "go_away":
@@ -327,7 +345,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
       setStatus("error");
       cleanup();
     }
-  }, [backendUrl, cleanup, clearPlaybackQueue, ensureMicPermission, playAudioChunk, sendWs]);
+  }, [backendUrl, cleanup, clearPlaybackQueue, commitPendingConversation, ensureMicPermission, playAudioChunk, sendWs]);
 
   const pauseMic = useCallback(() => {
     const node = workletNodeRef.current;
@@ -350,11 +368,18 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
   }, [sendWs, stopCapture]);
 
   const endSession = useCallback(() => {
+    if (turnCompleteTimerRef.current) {
+      clearTimeout(turnCompleteTimerRef.current);
+      turnCompleteTimerRef.current = null;
+    }
+    commitPendingConversation();
     cleanup();
     setStatus("idle");
+    inputTranscriptRef.current = "";
+    outputTranscriptRef.current = "";
     setInputTranscript("");
     setOutputTranscript("");
-  }, [cleanup]);
+  }, [cleanup, commitPendingConversation]);
 
   return {
     status,

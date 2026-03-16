@@ -1,7 +1,37 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProductDisplayInfo, RankedResult, SearchResponse } from "@shopping-assistant/shared";
 import App from "../App";
+
+class MockWebSocket {
+  static OPEN = 1;
+  static CLOSED = 3;
+  static instances: MockWebSocket[] = [];
+  readyState = MockWebSocket.OPEN;
+  onopen: (() => void) | null = null;
+  onmessage: ((evt: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: ((evt: unknown) => void) | null = null;
+  send = vi.fn((payload: string) => {
+    const message = JSON.parse(payload) as { type?: string };
+    if (message.type === "config") {
+      setTimeout(() => {
+        this.onmessage?.({ data: JSON.stringify({ type: "ready" }) });
+      }, 0);
+    }
+  });
+  close = vi.fn(() => {
+    this.readyState = MockWebSocket.CLOSED;
+    this.onclose?.();
+  });
+
+  constructor() {
+    MockWebSocket.instances.push(this);
+    setTimeout(() => this.onopen?.(), 0);
+  }
+}
+
+vi.stubGlobal("WebSocket", MockWebSocket);
 
 const product: ProductDisplayInfo = {
   name: "Compact Leather Tote",
@@ -100,6 +130,22 @@ const response: SearchResponse = {
 };
 
 describe("chat page", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    MockWebSocket.instances = [];
+    Object.defineProperty(navigator, "permissions", {
+      value: {
+        query: vi.fn().mockResolvedValue({ state: "granted" }),
+      },
+      configurable: true,
+    });
+    Object.assign(chrome, {
+      tabs: {
+        create: vi.fn(),
+      },
+    });
+  });
+
   it("shows a horizontal compact-results strip and a single dedicated composer", () => {
     render(
       <App
@@ -127,5 +173,45 @@ describe("chat page", () => {
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", code: "Enter" });
 
     expect(screen.getByText("How do these compare?")).toBeInTheDocument();
+  });
+
+  it("keeps completed voice turns in chat after the voice session is stopped", async () => {
+    render(
+      <App
+        initialPath="/chat"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+        }}
+      />,
+    );
+
+    await act(async () => {
+      const voiceButtons = screen.getAllByRole("button", { name: /voice chat/i });
+      fireEvent.click(voiceButtons[voiceButtons.length - 1]);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    const ws = MockWebSocket.instances[0];
+
+    act(() => {
+      ws.onmessage?.({ data: JSON.stringify({ type: "input_transcript", content: "Which one is the best value?" }) });
+      ws.onmessage?.({ data: JSON.stringify({ type: "output_transcript", content: "Marketplace 1 looks like the best value right now." }) });
+      ws.onmessage?.({ data: JSON.stringify({ type: "turn_complete" }) });
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+
+    const voiceButtons = screen.getAllByRole("button", { name: /voice chat/i });
+    fireEvent.click(voiceButtons[voiceButtons.length - 1]);
+    fireEvent.click(screen.getAllByRole("button", { name: /voice chat/i }).slice(-1)[0]);
+
+    expect(screen.getByText("Which one is the best value?")).toBeInTheDocument();
+    expect(screen.getByText("Marketplace 1 looks like the best value right now.")).toBeInTheDocument();
   });
 });

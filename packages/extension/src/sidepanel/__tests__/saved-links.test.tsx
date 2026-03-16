@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProductDisplayInfo, SearchResponse } from "@shopping-assistant/shared";
 import App from "../App";
 
@@ -100,6 +100,11 @@ const response: SearchResponse = {
 };
 
 describe("saved links flow", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cleanup();
+  });
+
   it("lets a result be saved from home and managed from settings", () => {
     render(
       <App
@@ -120,5 +125,73 @@ describe("saved links flow", () => {
 
     expect(screen.getByText("Compact Leather Tote Bag")).toBeInTheDocument();
     expect(screen.getByText("AliExpress")).toBeInTheDocument();
+  });
+
+  it("opens the saved product URL from settings", () => {
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+
+    render(
+      <App
+        initialPath="/settings"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+          savedLinks: [
+            {
+              id: "res-1",
+              name: "Compact Leather Tote Bag",
+              marketplace: "AliExpress",
+              priceLabel: "$79.99",
+              imageUrl: "https://example.com/result.jpg",
+              productUrl: "https://example.com/result",
+            },
+          ],
+        }}
+      />,
+    );
+
+    const openButtons = screen.getAllByRole("button", { name: /open compact leather tote bag/i });
+    fireEvent.click(openButtons[openButtons.length - 1]);
+
+    expect(openSpy).toHaveBeenCalledWith("https://example.com/result", "_blank", "noopener");
+  });
+
+  it("truncates long saved-link names and keeps the actions area separate", () => {
+    render(
+      <App
+        initialPath="/settings"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+          savedLinks: [
+            {
+              id: "long-1",
+              name: "Mini Pocket Scale 500g 200g 100g 1kg LCD Electronic Jewelry Kitchen Digital Gram Scale",
+              marketplace: "AliExpress",
+              priceLabel: "$0.99",
+              imageUrl: null,
+              productUrl: "https://example.com/scale",
+            },
+          ],
+        }}
+      />,
+    );
+
+    const price = screen.getByText("$0.99");
+    const openButtons = screen.getAllByRole("button", {
+      name: /open mini pocket scale 500g 200g 100g 1kg lcd electronic jewelry kitchen digital gram scale/i,
+    });
+    const removeButton = screen.getByRole("button", { name: /remove mini pocket scale/i });
+
+    expect(openButtons[0]).toHaveTextContent("Mini Pocket Scale 500g 200g 100g 1kg LCD …");
+    expect(price).toHaveClass("shrink-0");
+    expect(openButtons[openButtons.length - 1]).toHaveClass("shrink-0");
+    expect(removeButton).toHaveClass("shrink-0");
   });
 });

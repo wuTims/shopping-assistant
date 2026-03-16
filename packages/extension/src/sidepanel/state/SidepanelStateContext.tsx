@@ -450,6 +450,41 @@ export function SidepanelStateProvider({
       : null;
   const currentResponse = viewState.view === "results" ? viewState.response : null;
 
+  const commitVoiceConversation = useCallback((turn: { inputTranscript: string; outputTranscript: string }) => {
+    setChatMessages((messages) => {
+      const nextMessages: ChatMessage[] = [];
+      const baseContext = messages.length === 0 && currentProduct && currentResponse ? {
+        currentProduct,
+        searchResults: currentResponse.results,
+      } : null;
+      const baseTimestamp = Date.now();
+
+      if (turn.inputTranscript) {
+        nextMessages.push({
+          id: crypto.randomUUID(),
+          role: "user",
+          content: turn.inputTranscript,
+          inputMode: "voice",
+          timestamp: baseTimestamp,
+          context: baseContext,
+        });
+      }
+
+      if (turn.outputTranscript) {
+        nextMessages.push({
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: turn.outputTranscript,
+          inputMode: "voice",
+          timestamp: baseTimestamp + nextMessages.length,
+          context: null,
+        });
+      }
+
+      return nextMessages.length > 0 ? [...messages, ...nextMessages] : messages;
+    });
+  }, [currentProduct, currentResponse]);
+
   const voiceContext = useMemo(() => ({
     product: currentProduct ? {
       name: currentProduct.name,
@@ -464,7 +499,11 @@ export function SidepanelStateProvider({
     })),
   }), [currentProduct, displayResults]);
 
-  const voice = useVoice({ backendUrl: BACKEND_WS_URL, context: voiceContext });
+  const voice = useVoice({
+    backendUrl: BACKEND_WS_URL,
+    context: voiceContext,
+    onConversationCommit: commitVoiceConversation,
+  });
 
   useEffect(() => {
     if (viewState.view !== "results") {
@@ -515,6 +554,7 @@ export function SidepanelStateProvider({
     chatMessages,
     currentProduct,
     currentResponse,
+    commitVoiceConversation,
     displayResults,
     noPriceCount,
     priceBarCollapsed,

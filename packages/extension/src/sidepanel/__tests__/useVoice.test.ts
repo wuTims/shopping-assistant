@@ -12,7 +12,14 @@ class MockWebSocket {
   onmessage: ((evt: { data: string }) => void) | null = null;
   onclose: (() => void) | null = null;
   onerror: ((evt: unknown) => void) | null = null;
-  send = vi.fn();
+  send = vi.fn((payload: string) => {
+    const message = JSON.parse(payload) as { type?: string };
+    if (message.type === "config") {
+      setTimeout(() => {
+        this.onmessage?.({ data: JSON.stringify({ type: "ready" }) });
+      }, 0);
+    }
+  });
   close = vi.fn(() => {
     this.readyState = MockWebSocket.CLOSED;
     this.onclose?.();
@@ -32,6 +39,17 @@ describe("useVoice", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     MockWebSocket.instances = [];
+    Object.defineProperty(navigator, "permissions", {
+      value: {
+        query: vi.fn().mockResolvedValue({ state: "granted" }),
+      },
+      configurable: true,
+    });
+    Object.assign(chrome, {
+      tabs: {
+        create: vi.fn(),
+      },
+    });
   });
 
   it("starts in idle state", () => {
@@ -95,6 +113,69 @@ describe("useVoice", () => {
 
     expect(result.current.status).toBe("idle");
     expect(ws.readyState).toBe(MockWebSocket.CLOSED);
+  });
+
+  it("commits completed transcripts before clearing them on turn completion", async () => {
+    const onConversationCommit = vi.fn();
+    const { result } = renderHook(() =>
+      useVoice({
+        backendUrl: "ws://localhost:8080",
+        context: {},
+        onConversationCommit,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    const ws = MockWebSocket.instances[0];
+
+    act(() => {
+      ws.onmessage?.({ data: JSON.stringify({ type: "input_transcript", content: "Is this the best price?" }) });
+      ws.onmessage?.({ data: JSON.stringify({ type: "output_transcript", content: "This is currently the cheapest match." }) });
+      ws.onmessage?.({ data: JSON.stringify({ type: "turn_complete" }) });
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+
+    expect(onConversationCommit).toHaveBeenCalledWith({
+      inputTranscript: "Is this the best price?",
+      outputTranscript: "This is currently the cheapest match.",
+    });
+    expect(result.current.inputTranscript).toBe("");
+    expect(result.current.outputTranscript).toBe("");
+  });
+
+  it("commits pending transcripts when the session ends before turn completion arrives", async () => {
+    const onConversationCommit = vi.fn();
+    const { result } = renderHook(() =>
+      useVoice({
+        backendUrl: "ws://localhost:8080",
+        context: {},
+        onConversationCommit,
+      }),
+    );
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    const ws = MockWebSocket.instances[0];
+
+    act(() => {
+      ws.onmessage?.({ data: JSON.stringify({ type: "input_transcript", content: "Compare this against Home Depot." }) });
+      ws.onmessage?.({ data: JSON.stringify({ type: "output_transcript", content: "Home Depot is slightly higher for this item." }) });
+      result.current.endSession();
+    });
+
+    expect(onConversationCommit).toHaveBeenCalledWith({
+      inputTranscript: "Compare this against Home Depot.",
+      outputTranscript: "Home Depot is slightly higher for this item.",
+    });
+    expect(result.current.status).toBe("idle");
   });
 
   it("cleans up on unmount", async () => {
