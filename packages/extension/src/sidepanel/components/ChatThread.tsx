@@ -7,12 +7,14 @@ interface Props {
   isLoading: boolean;
   showComposer?: boolean;
   isVoiceRecording?: boolean;
+  voiceStatus?: string;
   voiceInputTranscript?: string;
   voiceOutputTranscript?: string;
   onMicToggle?: () => void;
 }
 
-export function ChatThread({ messages, onSendMessage, isLoading, showComposer = true, isVoiceRecording, voiceInputTranscript, voiceOutputTranscript, onMicToggle }: Props) {
+export function ChatThread({ messages, onSendMessage, isLoading, showComposer = true, isVoiceRecording, voiceStatus, voiceInputTranscript, voiceOutputTranscript, onMicToggle }: Props) {
+  const isVoiceSessionActive = voiceStatus === "recording" || voiceStatus === "paused" || voiceStatus === "connecting";
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -63,14 +65,14 @@ export function ChatThread({ messages, onSendMessage, isLoading, showComposer = 
             </div>
           </div>
         ))}
-        {isVoiceRecording && voiceInputTranscript && (
+        {isVoiceSessionActive && voiceInputTranscript && (
           <div className="flex justify-end">
             <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary/60 px-3.5 py-2.5 text-sm text-white/90 italic">
               {voiceInputTranscript}
             </div>
           </div>
         )}
-        {isVoiceRecording && voiceOutputTranscript && (
+        {isVoiceSessionActive && voiceOutputTranscript && (
           <div className="flex justify-start">
             <div className="w-6 h-6 rounded-full bg-accent-green flex items-center justify-center text-white shrink-0 mr-2 mt-1">
               <span className="material-icons text-xs">smart_toy</span>

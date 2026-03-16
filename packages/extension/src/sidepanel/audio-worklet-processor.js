@@ -10,6 +10,17 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     super();
     this.buffer = new Int16Array(BUFFER_SIZE);
     this.writeIndex = 0;
+
+    this.port.onmessage = (event) => {
+      if (event.data?.type === "flush") {
+        if (this.writeIndex > 0) {
+          const partial = this.buffer.buffer.slice(0, this.writeIndex * 2); // Int16 = 2 bytes per sample
+          this.port.postMessage({ type: "pcm_chunk", buffer: partial }, [partial]);
+          this.writeIndex = 0;
+        }
+        this.port.postMessage({ type: "flushed" });
+      }
+    };
   }
 
   /** @param {Float32Array[][]} inputs */

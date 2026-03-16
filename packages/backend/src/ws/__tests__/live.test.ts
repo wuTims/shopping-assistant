@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { Context } from "hono";
+import type { WSContext } from "hono/ws";
 
 // Mock @google/genai before importing live module
 const mockSession = {
@@ -23,7 +25,13 @@ function createMockWs() {
     send: vi.fn(),
     close: vi.fn(),
     readyState: 1,
-  };
+  } as unknown as WSContext;
+}
+
+function createMockContext(origin = "chrome-extension://test-id") {
+  return {
+    req: { header: (name: string) => name === "origin" ? origin : undefined },
+  } as unknown as Context;
 }
 
 describe("liveWebSocket", () => {
@@ -32,30 +40,30 @@ describe("liveWebSocket", () => {
   });
 
   it("returns WSEvents with onOpen, onMessage, onClose, onError", () => {
-    const events = liveWebSocket({});
+    const events = liveWebSocket(createMockContext());
     expect(events.onOpen).toBeDefined();
     expect(events.onMessage).toBeDefined();
     expect(events.onClose).toBeDefined();
   });
 
   it("does not open upstream session until config message", () => {
-    const events = liveWebSocket({});
+    const events = liveWebSocket(createMockContext());
     const ws = createMockWs();
-    events.onOpen!({} as Event, ws as any);
+    events.onOpen!({} as Event, ws);
     expect(mockConnect).not.toHaveBeenCalled();
   });
 
   it("opens upstream session on config message with product context", async () => {
-    const events = liveWebSocket({});
+    const events = liveWebSocket(createMockContext());
     const ws = createMockWs();
-    events.onOpen!({} as Event, ws as any);
+    events.onOpen!({} as Event, ws);
 
     const configMsg = JSON.stringify({
       type: "config",
       context: { product: { name: "Test Sneaker" }, results: [] },
     });
 
-    await events.onMessage!({ data: configMsg } as MessageEvent, ws as any);
+    await events.onMessage!({ data: configMsg } as MessageEvent, ws);
 
     expect(mockConnect).toHaveBeenCalledTimes(1);
     const connectArgs = mockConnect.mock.calls[0][0];
@@ -64,13 +72,13 @@ describe("liveWebSocket", () => {
   });
 
   it("forwards audio messages via sendRealtimeInput", async () => {
-    const events = liveWebSocket({});
+    const events = liveWebSocket(createMockContext());
     const ws = createMockWs();
-    events.onOpen!({} as Event, ws as any);
+    events.onOpen!({} as Event, ws);
 
     await events.onMessage!(
       { data: JSON.stringify({ type: "config", context: {} }) } as MessageEvent,
-      ws as any,
+      ws,
     );
 
     const audioMsg = JSON.stringify({
@@ -79,7 +87,7 @@ describe("liveWebSocket", () => {
       sampleRateHz: 16000,
       data: "AAAA",
     });
-    await events.onMessage!({ data: audioMsg } as MessageEvent, ws as any);
+    await events.onMessage!({ data: audioMsg } as MessageEvent, ws);
 
     expect(mockSession.sendRealtimeInput).toHaveBeenCalledWith({
       audio: { data: "AAAA", mimeType: "audio/pcm;rate=16000" },
@@ -87,18 +95,18 @@ describe("liveWebSocket", () => {
   });
 
   it("forwards text messages via sendClientContent (ordered turns)", async () => {
-    const events = liveWebSocket({});
+    const events = liveWebSocket(createMockContext());
     const ws = createMockWs();
-    events.onOpen!({} as Event, ws as any);
+    events.onOpen!({} as Event, ws);
 
     await events.onMessage!(
       { data: JSON.stringify({ type: "config", context: {} }) } as MessageEvent,
-      ws as any,
+      ws,
     );
 
     await events.onMessage!(
       { data: JSON.stringify({ type: "text", content: "hello" }) } as MessageEvent,
-      ws as any,
+      ws,
     );
 
     expect(mockSession.sendClientContent).toHaveBeenCalledWith({
@@ -108,18 +116,18 @@ describe("liveWebSocket", () => {
   });
 
   it("forwards audioStreamEnd to upstream", async () => {
-    const events = liveWebSocket({});
+    const events = liveWebSocket(createMockContext());
     const ws = createMockWs();
-    events.onOpen!({} as Event, ws as any);
+    events.onOpen!({} as Event, ws);
 
     await events.onMessage!(
       { data: JSON.stringify({ type: "config", context: {} }) } as MessageEvent,
-      ws as any,
+      ws,
     );
 
     await events.onMessage!(
       { data: JSON.stringify({ type: "audioStreamEnd" }) } as MessageEvent,
-      ws as any,
+      ws,
     );
 
     expect(mockSession.sendRealtimeInput).toHaveBeenCalledWith({
@@ -128,13 +136,13 @@ describe("liveWebSocket", () => {
   });
 
   it("sends error if audio/text received before config", async () => {
-    const events = liveWebSocket({});
+    const events = liveWebSocket(createMockContext());
     const ws = createMockWs();
-    events.onOpen!({} as Event, ws as any);
+    events.onOpen!({} as Event, ws);
 
     await events.onMessage!(
       { data: JSON.stringify({ type: "audio", encoding: "pcm_s16le", sampleRateHz: 16000, data: "AA" }) } as MessageEvent,
-      ws as any,
+      ws,
     );
 
     expect(ws.send).toHaveBeenCalledWith(
@@ -143,16 +151,16 @@ describe("liveWebSocket", () => {
   });
 
   it("closes upstream session on client disconnect", async () => {
-    const events = liveWebSocket({});
+    const events = liveWebSocket(createMockContext());
     const ws = createMockWs();
-    events.onOpen!({} as Event, ws as any);
+    events.onOpen!({} as Event, ws);
 
     await events.onMessage!(
       { data: JSON.stringify({ type: "config", context: {} }) } as MessageEvent,
-      ws as any,
+      ws,
     );
 
-    events.onClose!({} as Event, ws as any);
+    events.onClose!({} as Event, ws);
     expect(mockSession.close).toHaveBeenCalled();
   });
 });

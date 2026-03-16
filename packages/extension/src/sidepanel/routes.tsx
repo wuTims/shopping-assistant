@@ -199,6 +199,7 @@ function ChatInput() {
   const [input, setInput] = useState("");
 
   const handleMicToggle = () => {
+    if (voiceStatus === "connecting") return;
     if (isVoiceRecording) {
       pauseVoice();
     } else if (voiceStatus === "paused") {
@@ -228,7 +229,8 @@ function ChatInput() {
           type="button"
           aria-label="Voice chat"
           onClick={handleMicToggle}
-          className={`inline-flex h-11 w-11 items-center justify-center rounded-full transition-colors ${
+          disabled={voiceStatus === "connecting"}
+          className={`inline-flex h-11 w-11 items-center justify-center rounded-full transition-colors disabled:opacity-60 ${
             isVoiceRecording
               ? "bg-red-500 text-white animate-pulse"
               : voiceStatus === "paused"
@@ -260,7 +262,7 @@ function ChatInput() {
 function ChatRoute() {
   const {
     currentProduct, displayResults, chatMessages, chatLoading, sendChatMessage,
-    isVoiceRecording, voiceInputTranscript, voiceOutputTranscript,
+    isVoiceRecording, voiceStatus, voiceInputTranscript, voiceOutputTranscript,
   } = useSidepanelState();
 
   return (
@@ -334,6 +336,7 @@ function ChatRoute() {
             isLoading={chatLoading}
             showComposer={false}
             isVoiceRecording={isVoiceRecording}
+            voiceStatus={voiceStatus}
             voiceInputTranscript={voiceInputTranscript}
             voiceOutputTranscript={voiceOutputTranscript}
           />

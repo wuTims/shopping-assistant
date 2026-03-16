@@ -451,7 +451,12 @@ export function SidepanelStateProvider({
   const currentResponse = viewState.view === "results" ? viewState.response : null;
 
   const voiceContext = useMemo(() => ({
-    product: currentProduct,
+    product: currentProduct ? {
+      name: currentProduct.name,
+      price: currentProduct.price,
+      currency: currentProduct.currency,
+      marketplace: currentProduct.marketplace,
+    } : null,
     results: displayResults.slice(0, 5).map((r) => ({
       title: r.result.title,
       price: r.result.price,
@@ -460,6 +465,12 @@ export function SidepanelStateProvider({
   }), [currentProduct, displayResults]);
 
   const voice = useVoice({ backendUrl: BACKEND_WS_URL, context: voiceContext });
+
+  useEffect(() => {
+    if (viewState.view !== "results") {
+      voice.endSession();
+    }
+  }, [viewState.view, voice.endSession]);
 
   const value = useMemo<SidepanelStateValue>(() => ({
     viewState,

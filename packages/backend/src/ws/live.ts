@@ -1,3 +1,4 @@
+import type { Context } from "hono";
 import type { WSContext, WSEvents } from "hono/ws";
 import { Modality } from "@google/genai";
 import type { Session, LiveServerMessage } from "@google/genai";
@@ -5,24 +6,12 @@ import type { WsClientMessage, WsServerMessage } from "@shopping-assistant/share
 import { VOICE_SESSION_MAX_MS } from "@shopping-assistant/shared";
 import { ai, liveModel } from "../services/ai-client.js";
 
-function buildSystemInstruction(context: Record<string, unknown>): string {
-  const product = context.product as Record<string, unknown> | undefined;
-  const results = context.results as unknown[] | undefined;
-
-  let instruction =
+function buildSystemInstruction(): string {
+  return (
     "You are a helpful shopping assistant. The user is browsing a product online " +
     "and has found search results for cheaper alternatives. Help them compare options, " +
-    "answer questions about products, and make purchase decisions. Be concise and conversational.";
-
-  if (product) {
-    instruction += `\n\nCurrent product: ${JSON.stringify(product)}`;
-  }
-  if (results && results.length > 0) {
-    const top = results.slice(0, 5);
-    instruction += `\n\nTop search results:\n${JSON.stringify(top)}`;
-  }
-
-  return instruction;
+    "answer questions about products, and make purchase decisions. Be concise and conversational."
+  );
 }
 
 function sendToClient(ws: WSContext, message: WsServerMessage): void {
@@ -33,7 +22,7 @@ function sendToClient(ws: WSContext, message: WsServerMessage): void {
   }
 }
 
-export function liveWebSocket(_c: unknown): WSEvents {
+export function liveWebSocket(c: Context): WSEvents {
   let upstream: Session | null = null;
   let configReceived = false;
   let closed = false;
@@ -48,6 +37,17 @@ export function liveWebSocket(_c: unknown): WSEvents {
 
   return {
     onOpen(_evt, ws) {
+      const origin = c.req.header("origin") ?? "";
+      if (
+        !origin.startsWith("chrome-extension://") &&
+        !origin.startsWith("http://localhost")
+      ) {
+        sendToClient(ws, { type: "error", message: "Unauthorized origin" });
+        closed = true;
+        cleanupTimer();
+        ws.close();
+        return;
+      }
       console.log("[live] Client connected");
     },
 
@@ -69,7 +69,7 @@ export function liveWebSocket(_c: unknown): WSEvents {
         }
         configReceived = true;
 
-        const systemInstruction = buildSystemInstruction(message.context);
+        const systemInstruction = buildSystemInstruction();
 
         try {
           const session = await ai.live.connect({
@@ -123,7 +123,7 @@ export function liveWebSocket(_c: unknown): WSEvents {
 
                 if (message.goAway) {
                   const timeLeftMs = message.goAway.timeLeft
-                    ? parseInt(String(message.goAway.timeLeft), 10) * 1000
+                    ? Math.round(parseFloat(String(message.goAway.timeLeft)) * 1000)
                     : 0;
                   console.log(`[live] GoAway received, ${timeLeftMs}ms remaining`);
                   sendToClient(ws, { type: "go_away", timeLeftMs });
@@ -161,6 +161,23 @@ export function liveWebSocket(_c: unknown): WSEvents {
           }
 
           upstream = session;
+
+          // Send product context as a user message (keeps system prompt injection-free)
+          const contextData = message.context;
+          if (contextData && (contextData.product || contextData.results)) {
+            const contextParts: string[] = [];
+            if (contextData.product) {
+              contextParts.push(`Current product the user is viewing: ${JSON.stringify(contextData.product)}`);
+            }
+            if (contextData.results && Array.isArray(contextData.results) && contextData.results.length > 0) {
+              const top = contextData.results.slice(0, 5);
+              contextParts.push(`Top search results found:\n${JSON.stringify(top)}`);
+            }
+            session.sendClientContent({
+              turns: [{ role: "user", parts: [{ text: contextParts.join("\n\n") }] }],
+              turnComplete: true,
+            });
+          }
 
           sessionTimer = setTimeout(() => {
             console.log("[live] Server-side session timeout reached");

@@ -206,6 +206,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
           case "error":
             setError(msg.message);
             setStatus("error");
+            cleanup();
             break;
         }
       };
@@ -220,6 +221,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
 
       ws.onclose = () => {
         setStatus((prev) => (prev === "error" ? prev : "idle"));
+        cleanup();
       };
 
       await new Promise<void>((resolve, reject) => {
@@ -259,7 +261,6 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
       };
 
       source.connect(workletNode);
-      workletNode.connect(audioCtx.destination);
 
       setStatus("recording");
     } catch (err) {
@@ -271,9 +272,23 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
   }, [backendUrl, cleanup, clearPlaybackQueue, playAudioChunk, sendWs]);
 
   const pauseMic = useCallback(() => {
-    sendWs({ type: "audioStreamEnd" });
-    stopCapture();
-    setStatus("paused");
+    const node = workletNodeRef.current;
+    if (node) {
+      const handleFlushed = (e: MessageEvent) => {
+        if (e.data?.type === "flushed") {
+          node.port.removeEventListener("message", handleFlushed);
+          sendWs({ type: "audioStreamEnd" });
+          stopCapture();
+          setStatus("paused");
+        }
+      };
+      node.port.addEventListener("message", handleFlushed);
+      node.port.postMessage({ type: "flush" });
+    } else {
+      sendWs({ type: "audioStreamEnd" });
+      stopCapture();
+      setStatus("paused");
+    }
   }, [sendWs, stopCapture]);
 
   const endSession = useCallback(() => {

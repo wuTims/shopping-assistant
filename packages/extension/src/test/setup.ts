@@ -25,6 +25,7 @@ const runtimeStub = {
     removeListener: () => {},
   },
   lastError: undefined,
+  getURL: (path: string) => `chrome-extension://test-id/${path}`,
 };
 
 Object.defineProperty(globalThis, "chrome", {
@@ -42,29 +43,52 @@ Object.defineProperty(globalThis, "chrome", {
 
 // Audio API mocks (required because SidepanelStateProvider calls useVoice)
 Object.defineProperty(globalThis, "AudioContext", {
-  value: vi.fn().mockImplementation(() => ({
-    audioWorklet: { addModule: vi.fn().mockResolvedValue(undefined) },
-    createMediaStreamSource: vi.fn().mockReturnValue({ connect: vi.fn(), disconnect: vi.fn() }),
-    createBuffer: vi.fn().mockReturnValue({ copyToChannel: vi.fn(), duration: 0.1 }),
-    createBufferSource: vi.fn().mockReturnValue({
+  value: vi.fn().mockImplementation(function (this: Record<string, unknown>) {
+    this.audioWorklet = { addModule: vi.fn().mockResolvedValue(undefined) };
+    this.createMediaStreamSource = vi.fn().mockReturnValue({ connect: vi.fn(), disconnect: vi.fn() });
+    this.createBuffer = vi.fn().mockReturnValue({ copyToChannel: vi.fn(), duration: 0.1 });
+    this.createBufferSource = vi.fn().mockReturnValue({
       buffer: null, connect: vi.fn(), start: vi.fn(), stop: vi.fn(), disconnect: vi.fn(),
       onended: null,
-    }),
-    currentTime: 0,
-    destination: {},
-    close: vi.fn(),
-    state: "running",
-    sampleRate: 24000,
-  })),
+    });
+    this.currentTime = 0;
+    this.destination = {};
+    this.close = vi.fn().mockResolvedValue(undefined);
+    this.state = "running";
+    this.sampleRate = 24000;
+  }),
   writable: true,
 });
 
 Object.defineProperty(globalThis, "AudioWorkletNode", {
-  value: vi.fn().mockImplementation(() => ({
-    port: { onmessage: null },
-    connect: vi.fn(),
-    disconnect: vi.fn(),
-  })),
+  value: vi.fn().mockImplementation(function (this: Record<string, unknown>) {
+    const listeners = new Map<string, Set<Function>>();
+    this.port = {
+      onmessage: null,
+      postMessage: vi.fn((data: unknown) => {
+        // Simulate worklet responding to flush
+        if (data && typeof data === "object" && (data as Record<string, unknown>).type === "flush") {
+          setTimeout(() => {
+            const flushedListeners = listeners.get("message");
+            if (flushedListeners) {
+              for (const listener of flushedListeners) {
+                listener({ data: { type: "flushed" } });
+              }
+            }
+          }, 0);
+        }
+      }),
+      addEventListener: vi.fn((type: string, fn: Function) => {
+        if (!listeners.has(type)) listeners.set(type, new Set());
+        listeners.get(type)!.add(fn);
+      }),
+      removeEventListener: vi.fn((type: string, fn: Function) => {
+        listeners.get(type)?.delete(fn);
+      }),
+    };
+    this.connect = vi.fn();
+    this.disconnect = vi.fn();
+  }),
   writable: true,
 });
 
@@ -79,9 +103,4 @@ if (!globalThis.navigator.mediaDevices) {
     writable: true,
     configurable: true,
   });
-}
-
-// Add chrome.runtime.getURL stub (needed for AudioWorklet URL resolution)
-if (globalThis.chrome) {
-  (globalThis.chrome as any).runtime.getURL = (path: string) => `chrome-extension://test-id/${path}`;
 }
