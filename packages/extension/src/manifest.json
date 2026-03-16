@@ -26,6 +26,10 @@
     {
       "resources": ["src/sidepanel/audio-worklet-processor.js"],
       "matches": ["<all_urls>"]
+    },
+    {
+      "resources": ["src/mic-permission/index.html"],
+      "matches": ["<all_urls>"]
     }
   ],
   "icons": {}

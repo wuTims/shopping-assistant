@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { crx } from "@crxjs/vite-plugin";
@@ -7,6 +8,11 @@ export default defineConfig({
   plugins: [react(), crx({ manifest })],
   build: {
     outDir: "dist",
+    rollupOptions: {
+      input: {
+        "mic-permission": resolve(__dirname, "src/mic-permission/index.html"),
+      },
+    },
   },
   test: {
     environment: "jsdom",

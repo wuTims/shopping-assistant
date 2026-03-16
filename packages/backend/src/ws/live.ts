@@ -179,6 +179,8 @@ export function liveWebSocket(c: Context): WSEvents {
             });
           }
 
+          sendToClient(ws, { type: "ready" });
+
           sessionTimer = setTimeout(() => {
             console.log("[live] Server-side session timeout reached");
             sendToClient(ws, {

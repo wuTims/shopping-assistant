@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Microphone Access</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+      background: #fef7ed;
+      color: #1a1a1a;
+    }
+    .card {
+      text-align: center;
+      padding: 2rem;
+      max-width: 320px;
+    }
+    .icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+    }
+    h1 { font-size: 1.1rem; margin: 0 0 0.5rem; }
+    p { font-size: 0.85rem; color: #666; margin: 0 0 1.5rem; }
+    button {
+      background: #f97316;
+      color: white;
+      border: none;
+      border-radius: 999px;
+      padding: 0.65rem 1.5rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: #ea580c; }
+    .status { font-size: 0.85rem; margin-top: 1rem; }
+    .granted { color: #16a34a; }
+    .denied { color: #dc2626; }
+  </style>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons" />
+</head>
+<body>
+  <div class="card">
+    <div class="icon"><span class="material-icons" style="font-size:inherit">mic</span></div>
+    <h1>Microphone access needed</h1>
+    <p>The voice assistant needs your mic. Click below to allow access, then this tab will close automatically.</p>
+    <button id="grant-btn">Allow microphone</button>
+    <div id="status" class="status"></div>
+  </div>
+  <script type="module" src="mic-permission.ts"></script>
+</body>
+</html>

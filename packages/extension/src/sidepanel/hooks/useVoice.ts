@@ -158,6 +158,41 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
   const contextRef = useRef(context);
   contextRef.current = context;
 
+  const ensureMicPermission = useCallback(async (): Promise<boolean> => {
+    try {
+      const result = await navigator.permissions.query({ name: "microphone" as PermissionName });
+      if (result.state === "granted") return true;
+    } catch {
+      // permissions.query may not support "microphone" in all contexts — fall through
+    }
+
+    // In extension side panels the permission prompt is auto-dismissed.
+    // Open a dedicated tab so the browser can show the real prompt.
+    if (typeof chrome !== "undefined" && chrome.tabs) {
+      const grantUrl = chrome.runtime.getURL("src/mic-permission/index.html");
+      chrome.tabs.create({ url: grantUrl, active: true });
+
+      // Wait for the grant-page to message us back
+      return new Promise<boolean>((resolve) => {
+        const timeout = setTimeout(() => {
+          chrome.runtime.onMessage.removeListener(listener);
+          resolve(false);
+        }, 60_000);
+
+        const listener = (msg: { type?: string }) => {
+          if (msg.type === "MIC_PERMISSION_GRANTED") {
+            clearTimeout(timeout);
+            chrome.runtime.onMessage.removeListener(listener);
+            resolve(true);
+          }
+        };
+        chrome.runtime.onMessage.addListener(listener);
+      });
+    }
+
+    return false;
+  }, []);
+
   const start = useCallback(async () => {
     setError(null);
     setInputTranscript("");
@@ -165,6 +200,13 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
     setStatus("connecting");
 
     try {
+      const permitted = await ensureMicPermission();
+      if (!permitted) {
+        setError("Microphone permission is required for voice chat");
+        setStatus("error");
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { sampleRate: VOICE_INPUT_SAMPLE_RATE },
       });
@@ -173,10 +215,21 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
       const ws = new WebSocket(backendUrl + "/live");
       wsRef.current = ws;
 
+      // readyResolve is called when the backend sends "ready" after upstream connects
+      let readyResolve: (() => void) | null = null;
+      let readyReject: ((err: Error) => void) | null = null;
+      const readyPromise = new Promise<void>((resolve, reject) => {
+        readyResolve = resolve;
+        readyReject = reject;
+      });
+
       ws.onmessage = (evt) => {
         const msg = JSON.parse(evt.data) as WsServerMessage;
 
         switch (msg.type) {
+          case "ready":
+            readyResolve?.();
+            break;
           case "audio":
             playAudioChunk(msg.data);
             break;
@@ -204,6 +257,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
             console.log("[voice] Session resumption token received");
             break;
           case "error":
+            readyReject?.(new Error(msg.message));
             setError(msg.message);
             setStatus("error");
             cleanup();
@@ -212,6 +266,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
       };
 
       const handleWsError = () => {
+        readyReject?.(new Error("Connection error"));
         setError("Connection error");
         setStatus("error");
         cleanup();
@@ -220,6 +275,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
       ws.onerror = handleWsError;
 
       ws.onclose = () => {
+        readyReject?.(new Error("Connection closed"));
         setStatus((prev) => (prev === "error" ? prev : "idle"));
         cleanup();
       };
@@ -234,7 +290,9 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
       // Restore persistent error handler after connection promise resolves
       ws.onerror = handleWsError;
 
+      // Send config and wait for the backend to establish the upstream Gemini session
       sendWs({ type: "config", context: contextRef.current });
+      await readyPromise;
 
       const audioCtx = new AudioContext({ sampleRate: VOICE_INPUT_SAMPLE_RATE });
       audioCtxCaptureRef.current = audioCtx;
@@ -269,7 +327,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
       setStatus("error");
       cleanup();
     }
-  }, [backendUrl, cleanup, clearPlaybackQueue, playAudioChunk, sendWs]);
+  }, [backendUrl, cleanup, clearPlaybackQueue, ensureMicPermission, playAudioChunk, sendWs]);
 
   const pauseMic = useCallback(() => {
     const node = workletNodeRef.current;

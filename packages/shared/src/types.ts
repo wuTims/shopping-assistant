@@ -275,6 +275,7 @@ export type WsClientMessage =
   | { type: "audioStreamEnd" };
 
 export type WsServerMessage =
+  | { type: "ready" }
   | { type: "audio"; encoding: "pcm_s16le"; sampleRateHz: 24000; data: string }
   | { type: "input_transcript"; content: string }
   | { type: "output_transcript"; content: string }

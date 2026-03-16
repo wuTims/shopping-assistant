@@ -193,7 +193,7 @@ function HomeRoute() {
 
 function ChatInput() {
   const {
-    sendChatMessage, chatLoading, voiceStatus,
+    sendChatMessage, chatLoading, voiceStatus, voiceError,
     isVoiceRecording, startVoice, pauseVoice, endVoiceSession,
   } = useSidepanelState();
   const [input, setInput] = useState("");
@@ -211,6 +211,11 @@ function ChatInput() {
 
   return (
     <div className="border-t border-white/60 bg-white/70 px-4 py-3 backdrop-blur-xl">
+      {voiceError && (
+        <p className="mb-2 rounded-lg bg-red-50 px-3 py-1.5 text-xs text-red-600">
+          {voiceError}
+        </p>
+      )}
       <div className="flex items-center gap-2">
         <input
           type="text"
@@ -231,15 +236,27 @@ function ChatInput() {
           onClick={handleMicToggle}
           disabled={voiceStatus === "connecting"}
           className={`inline-flex h-11 w-11 items-center justify-center rounded-full transition-colors disabled:opacity-60 ${
-            isVoiceRecording
-              ? "bg-red-500 text-white animate-pulse"
-              : voiceStatus === "paused"
-                ? "bg-orange-400 text-white"
-                : "bg-white text-text-main shadow-sm"
+            voiceStatus === "connecting"
+              ? "bg-amber-400 text-white animate-pulse"
+              : isVoiceRecording
+                ? "bg-red-500 text-white animate-pulse"
+                : voiceStatus === "paused"
+                  ? "bg-orange-400 text-white"
+                  : voiceStatus === "error"
+                    ? "bg-red-100 text-red-500"
+                    : "bg-white text-text-main shadow-sm"
           }`}
         >
           <span className="material-icons text-lg">
-            {isVoiceRecording ? "pause" : voiceStatus === "paused" ? "stop" : "mic"}
+            {voiceStatus === "connecting"
+              ? "hourglass_top"
+              : isVoiceRecording
+                ? "pause"
+                : voiceStatus === "paused"
+                  ? "stop"
+                  : voiceStatus === "error"
+                    ? "mic_off"
+                    : "mic"}
           </span>
         </button>
         <button
