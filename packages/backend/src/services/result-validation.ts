@@ -37,7 +37,7 @@ const PRODUCT_DETAIL_PATTERNS: Array<{ host: RegExp; path: RegExp }> = [
   { host: /(^|\.)bestbuy\.com$/i, path: /^\/site\/(?!searchpage)/i },
   { host: /(^|\.)homedepot\.com$/i, path: /^\/p\/(?:-|$)/i },
   { host: /(^|\.)lowes\.com$/i, path: /^\/pd\/(?:-|$)/i },
-  { host: /(^|\.)etsy\.com$/i, path: /^\/listing\/(?:-|$)/i },
+  { host: /(^|\.)etsy\.com$/i, path: /^\/listing\/\d+/i },
   { host: /(^|\.)aliexpress\.com$/i, path: /^\/item\/(?:-|$|[\w-]+\.html)/i },
 ];
 
