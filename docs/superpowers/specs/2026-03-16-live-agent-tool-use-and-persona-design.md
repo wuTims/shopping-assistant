@@ -120,6 +120,7 @@ This produces reasonable token overlap in the heuristic scoring functions.
 - No `identifyProduct()` — we have text, not an image
 - No `generateImageSearchQueries()` / Brave image search / AliExpress image search
 - No `computeVisualSimilarityScores()` — no source image to compare against
+- No `blendScores()` — the full pipeline does `buildFallbackScores() → computeVisualSimilarityScores() → blendScores() → applyRanking()`. Since we skip visual scoring, `buildFallbackScores()` output is passed directly to `applyRanking()` as the final scores, bypassing `blendScores()` entirely
 - `diversityCap` applied but with smaller candidate pool (15 vs `MAX_RESULTS_FOR_RANKING`)
 - `quickHttpPriceEnrich` with `maxPriceResults=10` for latency (note: liveness checks still run on all candidates, so total HTTP requests may exceed 10)
 
@@ -178,27 +179,57 @@ export type WsServerMessage =
   // ... existing types ...
   | { type: "tool_start"; toolName: string; toolCallId: string }
   | { type: "tool_result"; toolName: string; toolCallId: string; results: RankedResult[] }
+  | { type: "tool_done"; toolCallId: string }
   | { type: "tool_cancelled"; toolCallId: string };
 ```
+
+- `tool_start` — tool execution began (UI shows activity indicator)
+- `tool_result` — `search_products` completed with results (UI renders inline cards + clears indicator)
+- `tool_done` — `compare_prices` or failed `search_products` completed without client results (UI clears indicator only)
+- `tool_cancelled` — user interrupted, tool aborted (UI clears indicator)
 
 **No new client → server messages.** The model decides when to call tools autonomously.
 
 ### Message flow during tool execution
 
 ```
-[Model decides to search]
+[Model decides to search — NON_BLOCKING so model keeps speaking]
   Server → Client:  { type: "tool_start", toolName: "search_products", toolCallId: "abc123" }
-  Server → Client:  { type: "audio", ... }  (model narrates: "Let me check...")
+  Server → Client:  { type: "audio", ... }  (model narrates: "Let me check..." — happens concurrently)
 
-[Search completes]
+[Search completes — schedule response for when model is idle]
   Server → Client:  { type: "tool_result", toolName: "search_products", toolCallId: "abc123", results: [...] }
-  Server → Gemini:  session.sendToolResponse({ functionResponses: [{ id: toolCallId, name: "search_products", response: { results: "..." } }] })
-  Server → Client:  { type: "audio", ... }  (model discusses results)
+  Server → Gemini:  session.sendToolResponse({ functionResponses: [{
+    id: toolCallId,
+    name: "search_products",
+    response: { results: "..." },
+    scheduling: FunctionResponseScheduling.WHEN_IDLE
+  }] })
+  Server → Client:  { type: "audio", ... }  (model discusses results after finishing current utterance)
+
+[compare_prices completes — no client results, just model text]
+  Server → Client:  { type: "tool_done", toolCallId: "def456" }
+  Server → Gemini:  session.sendToolResponse({ functionResponses: [{
+    id: toolCallId,
+    name: "compare_prices",
+    response: { comparison: "..." },
+    scheduling: FunctionResponseScheduling.WHEN_IDLE
+  }] })
 
 [If user interrupts mid-search]
   Gemini → Server:  toolCallCancellation { ids: ["abc123"] }
   Server → Client:  { type: "tool_cancelled", toolCallId: "abc123" }
   Server:           abortController.abort() — cancel in-flight HTTP requests
+
+[If tool execution fails (network error, all providers down)]
+  Server → Client:  { type: "tool_done", toolCallId: "abc123" }
+  Server → Gemini:  session.sendToolResponse({ functionResponses: [{
+    id: toolCallId,
+    name: "search_products",
+    response: { error: "Search failed — could not reach marketplaces" },
+    scheduling: FunctionResponseScheduling.WHEN_IDLE
+  }] })
+  (Model receives error response and communicates it gracefully to user)
 ```
 
 ---
@@ -208,7 +239,7 @@ export type WsServerMessage =
 ### New imports
 
 ```typescript
-import { Type } from "@google/genai";
+import { Type, Behavior, FunctionResponseScheduling } from "@google/genai";
 import type { FunctionDeclaration, FunctionCall } from "@google/genai";
 import type { RankedResult } from "@shopping-assistant/shared";
 import { executeVoiceSearch } from "../services/voice-search.js";
@@ -222,6 +253,7 @@ Defined as constants in `live.ts`:
 const searchProductsDeclaration: FunctionDeclaration = {
   name: "search_products",
   description: "Search for product alternatives across online marketplaces. Use when the user asks about options not in the current results, wants to search a specific store, or asks for different alternatives.",
+  behavior: Behavior.NON_BLOCKING,
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -235,11 +267,19 @@ const searchProductsDeclaration: FunctionDeclaration = {
 const comparePricesDeclaration: FunctionDeclaration = {
   name: "compare_prices",
   description: "Compare prices across all known results from the initial search and any subsequent searches. Use when the user asks which option is cheapest, wants a price comparison, or asks about savings.",
+  behavior: Behavior.NON_BLOCKING,
   parameters: {
     type: Type.OBJECT,
     properties: {},
   },
 };
+```
+
+**`Behavior.NON_BLOCKING` is critical.** Without it, the model blocks on `sendToolResponse()` before generating any more audio — creating exactly the dead-air problem we're trying to solve. With `NON_BLOCKING`, the model continues speaking (narrating) while the backend executes the tool. The tool response is delivered via `sendToolResponse()` with `scheduling: FunctionResponseScheduling.WHEN_IDLE` so results are injected when the model finishes its current utterance.
+
+Required additional import:
+```typescript
+import { Behavior, FunctionResponseScheduling } from "@google/genai";
 ```
 
 ### State tracking
@@ -253,15 +293,25 @@ let initialResults: RankedResult[] = [];          // Parsed from config message 
 let initialContext: Record<string, unknown> = {}; // Raw config context for product info
 ```
 
-**Parsing initial results:** When the `config` message arrives, extract `context.results` (the top 5 results sent from the frontend as `{ rank, title, price, currency, marketplace, confidence }`). Convert these into lightweight `RankedResult` objects and store in `initialResults`. The `compare_prices` tool reads from `[...initialResults, ...accumulatedResults]` to have the full picture.
+**Parsing initial results:** The frontend currently sends only `displayResults.slice(0, 5)` in the voice context. This is fine for the voice context turn text (keeps the model prompt concise), but `compare_prices` needs the full result set to give accurate answers. Two-pronged approach:
+
+1. **Frontend change:** Add a `allResults` field to the config context containing the full `currentResponse.results` array (all `RankedResult` objects). The existing `results` field (top 5 summaries) stays for the voice context turn text.
+2. **Backend:** On `config` message, parse `context.allResults` into `initialResults: RankedResult[]`. Fall back to `context.results` (top 5) if `allResults` is absent (backward compat).
+
+The `compare_prices` tool reads from `[...initialResults, ...accumulatedResults]`. Original product price is extracted from `context.currentProduct.price` / `context.focusedProduct.price` stored in `initialContext`.
 
 ### `toolCall` handling in `onmessage` callback
 
 When `message.toolCall?.functionCalls` is present:
 1. For each `FunctionCall` in the array, send `tool_start` to client (using `functionCall.id` as `toolCallId`)
-2. Execute the function (search or compare)
-3. If not cancelled: send `tool_result` to client, then `session.sendToolResponse({ functionResponses: [{ id: functionCall.id, name: functionCall.name, response: { ... } }] })` — the `id` field is **required** to correlate the response with the pending tool call
-4. Append new results to `accumulatedResults`
+2. Create `AbortController`, store in `pendingToolCalls` map keyed by `functionCall.id`
+3. Execute the function in a try/catch:
+   - **`search_products` success**: send `tool_result` (with results) to client, then `sendToolResponse` with `scheduling: FunctionResponseScheduling.WHEN_IDLE`
+   - **`compare_prices` success**: send `tool_done` to client (no results payload), then `sendToolResponse` with comparison text
+   - **Any tool throws**: send `tool_done` to client, then `sendToolResponse` with `{ error: message }` so the model can respond gracefully (e.g. "I wasn't able to search right now")
+4. For `search_products` success: append new results to `accumulatedResults`
+5. Clean up `pendingToolCalls` entry
+6. The `id` field on `sendToolResponse` is **required** to correlate the response with the pending tool call
 
 ### `toolCallCancellation` handling
 
@@ -269,6 +319,19 @@ When `message.toolCallCancellation?.ids` is present:
 1. For each ID, call `pendingToolCalls.get(id)?.abort()`
 2. Send `tool_cancelled` to client
 3. Clean up from `pendingToolCalls` map
+
+### Cleanup on WebSocket close
+
+The existing `onClose` and `onError` handlers close the upstream session. They must also abort all pending tool calls:
+
+```typescript
+for (const [, controller] of pendingToolCalls) {
+  controller.abort();
+}
+pendingToolCalls.clear();
+```
+
+Without this, in-flight HTTP requests from disconnected clients continue running until natural timeout.
 
 ---
 
@@ -286,9 +349,15 @@ toolActivity: { active: boolean; toolName: string | null }
 onToolResult?: (results: RankedResult[]) => void
 ```
 
+**Updated `UseVoiceReturn` interface** (added fields):
+```typescript
+toolActivity: { active: boolean; toolName: string | null };
+```
+
 **New message handlers in `ws.onmessage`:**
 - `tool_start` → set `toolActivity = { active: true, toolName }`
 - `tool_result` → set `toolActivity = { active: false, toolName: null }`, call `onToolResult(results)`
+- `tool_done` → set `toolActivity = { active: false, toolName: null }` (no results to render — used by `compare_prices` and failed searches)
 - `tool_cancelled` → set `toolActivity = { active: false, toolName: null }`
 
 ### `ChatThread.tsx` component
@@ -329,6 +398,8 @@ const [voiceSearchResults, setVoiceSearchResults] = useState<RankedResult[]>([])
 | **Modify** | `packages/extension/src/sidepanel/state/SidepanelStateContext.tsx` | Accumulate voice results, update chat focus options |
 
 **Not changed:** `/search` endpoint, `/chat` endpoint, content script, service worker, manifest, audio worklet.
+
+**Note on `SidepanelStateContext.tsx`:** The `voiceContext` memo also needs to include `allResults: currentResponse?.results ?? []` (full result set for `compare_prices` tool). The existing `results` field (top 5 summaries) is unchanged.
 
 ---
 
