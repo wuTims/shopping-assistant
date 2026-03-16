@@ -1,0 +1,191 @@
+name: Deploy Backend to Cloud Run
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # All paths prefixed with shopping-assistant/ — this is a subdirectory of the repo
+      - 'shopping-assistant/packages/backend/**'
+      - 'shopping-assistant/packages/shared/**'
+      - 'shopping-assistant/pnpm-lock.yaml'
+      - 'shopping-assistant/tsconfig.base.json'
+      - 'shopping-assistant/.dockerignore'
+      - 'shopping-assistant/package.json'
+  workflow_dispatch: # Allow manual trigger
+
+# Prevent concurrent deploys — newer push cancels in-progress deploy
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: true
+
+env:
+  PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  REGION: us-central1
+  SERVICE_NAME: shopping-assistant-backend
+  REPOSITORY: shopping-assistant
+  IMAGE_NAME: backend
+
+# All run commands execute from the shopping-assistant subdirectory
+defaults:
+  run:
+    working-directory: shopping-assistant
+
+jobs:
+  # Job 1: Typecheck and test before deploying
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: shopping-assistant/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared package
+        run: pnpm build:shared
+
+      - name: Typecheck backend
+        run: pnpm --filter @shopping-assistant/backend typecheck
+
+  # Job 2: Build image, push, deploy
+  deploy:
+    needs: check
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write # Required for Workload Identity Federation
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Authenticate Docker to Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -f packages/backend/Dockerfile \
+            .
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Deploy to Cloud Run (no traffic)
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          region: ${{ env.REGION }}
+          image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPOSITORY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          # These flags are authoritative — manual Cloud Run config changes will be
+          # overwritten on the next deploy. Modify this workflow to change service config.
+          flags: |
+            --port=8080
+            --timeout=3600
+            --session-affinity
+            --cpu-boost
+            --concurrency=20
+            --min-instances=1
+            --max-instances=5
+            --memory=512Mi
+            --cpu=1
+            --allow-unauthenticated
+            --no-traffic
+          secrets: |
+            GEMINI_API_KEY=GEMINI_API_KEY:latest
+            BRAVE_API_KEY=BRAVE_API_KEY:latest
+            ALIEXPRESS_APP_KEY=ALIEXPRESS_APP_KEY:latest
+            ALIEXPRESS_API_KEY=ALIEXPRESS_API_KEY:latest
+            ALIEXPRESS_ACCESS_TOKEN=ALIEXPRESS_ACCESS_TOKEN:latest
+            ALIEXPRESS_REFRESH_TOKEN=ALIEXPRESS_REFRESH_TOKEN:latest
+            ALIEXPRESS_TOKEN_EXPIRY=ALIEXPRESS_TOKEN_EXPIRY:latest
+            ALIEXPRESS_REFRESH_TOKEN_EXPIRY=ALIEXPRESS_REFRESH_TOKEN_EXPIRY:latest
+          env_vars: |
+            GCP_PROJECT_ID=${{ env.PROJECT_ID }}
+            GEMINI_LIVE_MODEL=gemini-2.5-flash-native-audio-preview-12-2025
+            CORS_ALLOWED_ORIGINS=${{ vars.CORS_ALLOWED_ORIGINS }}
+
+      - name: Verify new revision before routing traffic
+        run: |
+          # Get the revision URL (not the service URL — the revision is not serving yet)
+          REVISION_URL=$(gcloud run revisions list \
+            --service=${{ env.SERVICE_NAME }} \
+            --region=${{ env.REGION }} \
+            --sort-by=~CREATED \
+            --format='value(status.url)' \
+            --limit=1)
+          echo "Revision URL: ${REVISION_URL}"
+
+          # If revision URL isn't available, fall back to service URL with tag
+          if [ -z "$REVISION_URL" ]; then
+            REVISION_URL="${{ steps.deploy.outputs.url }}"
+          fi
+
+          # Health check with retry (new revision may take a moment to start)
+          for i in 1 2 3 4 5; do
+            HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${REVISION_URL}/health" 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Health check passed!"
+              curl -s "${REVISION_URL}/health" | jq .
+              exit 0
+            fi
+            echo "Attempt $i: got HTTP $HTTP_CODE, retrying in 5s..."
+            sleep 5
+          done
+          echo "Health check failed after 5 attempts"
+          exit 1
+
+      - name: Route traffic to new revision
+        run: |
+          gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
+            --to-latest \
+            --region=${{ env.REGION }}
+          echo "Traffic routed to latest revision."
+          SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region=${{ env.REGION }} \
+            --format='value(status.url)')
+          echo "Service URL: ${SERVICE_URL}"
+
+      - name: Rollback on failure
+        if: failure() && steps.deploy.outcome == 'success'
+        run: |
+          echo "Deployment verification failed — rolling back to previous revision."
+          # Get the second-most-recent revision (the one before this deploy)
+          PREV_REVISION=$(gcloud run revisions list \
+            --service=${{ env.SERVICE_NAME }} \
+            --region=${{ env.REGION }} \
+            --sort-by=~CREATED \
+            --format='value(REVISION)' \
+            --limit=2 | tail -1)
+          if [ -n "$PREV_REVISION" ]; then
+            gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
+              --to-revisions=${PREV_REVISION}=100 \
+              --region=${{ env.REGION }}
+            echo "Rolled back to revision: ${PREV_REVISION}"
+          else
+            echo "No previous revision found — this may be the first deploy."
+          fi
