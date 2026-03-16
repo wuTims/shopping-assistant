@@ -1,6 +1,8 @@
 # Shopping Source Discovery Agent
 
-Chrome extension (MV3) that finds cheaper product alternatives across marketplaces, powered by Gemini and Brave Search.
+Chrome extension (MV3) that finds cheaper product alternatives across marketplaces, powered by Gemini and Brave Search. Backend deployed on GCP Cloud Run with automated CI/CD.
+
+**[Architecture Overview](docs/submission/architecture-overview.md)** | **[GCP Deployment Proof](docs/submission/gcp-deployment-proof.md)** | **[Project Summary](docs/submission/project-summary.md)**
 
 ## Prerequisites
 
@@ -14,7 +16,7 @@ Chrome extension (MV3) that finds cheaper product alternatives across marketplac
 
 ## API Keys
 
-The backend requires two API keys. Copy the example env file and fill in your keys:
+The backend requires two API keys (AliExpress is optional). Copy the example env file and fill in your keys:
 
 ```bash
 cp packages/backend/.env.example packages/backend/.env
@@ -30,6 +32,8 @@ PORT=8080
 
 - Get a Gemini API key at [Google AI Studio](https://aistudio.google.com/apikey)
 - Get a Brave Search API key at [Brave Search API](https://brave.com/search/api/)
+
+In production, secrets are managed via GCP Secret Manager. See [GCP Setup Guide](docs/submission/gcp-setup.md) for deployment configuration.
 
 ## Build
 
@@ -64,9 +68,18 @@ The backend runs on `http://localhost:8080` by default.
 ## Usage
 
 1. Navigate to any product page (e.g. Amazon, eBay, or any online store)
-2. The content script will detect product images and show an overlay
-3. Click the overlay to search for cheaper alternatives
-4. Results appear in the side panel
+2. The content script will detect product images and show an overlay icon
+3. Click the overlay to search for cheaper alternatives across Brave Search and AliExpress
+4. Results appear in the side panel, ranked by visual similarity and price
+5. Ask follow-up questions via text chat or voice (Gemini Live API)
+
+## Deployment
+
+The backend deploys to GCP Cloud Run automatically on push to `main` via GitHub Actions. The pipeline typechecks, builds a Docker image, deploys a canary revision, health-checks it, and routes traffic (or rolls back).
+
+- **Workflow:** [`.github/workflows/deploy-backend.yml`](.github/workflows/deploy-backend.yml)
+- **Setup:** [GCP Setup Guide](docs/submission/gcp-setup.md) (one-time infrastructure provisioning)
+- **Proof:** [GCP Deployment Proof](docs/submission/gcp-deployment-proof.md)
 
 ## Development
 
@@ -87,3 +100,16 @@ When using `pnpm dev:ext`, reload the extension in `chrome://extensions` after t
 - **Extension not detecting products:** Make sure the backend is running and accessible at `http://localhost:8080`
 - **API errors in backend logs:** Verify your `.env` keys are valid and have sufficient quota
 - **Build errors after pulling changes:** Run `pnpm build:shared` first — the extension and backend depend on the shared types package
+
+## Architecture
+
+See [Architecture Overview](docs/submission/architecture-overview.md) for the full system design and [Architecture Diagram](docs/submission/architecture-diagram.mermaid) for a visual representation.
+
+```
+packages/
+├── shared/      TypeScript types + constants (the contract)
+├── extension/   Chrome Extension (Vite + CRXJS + React 19)
+└── backend/     Cloud Run API (Hono + Node.js)
+```
+
+Key technologies: Gemini 2.5 Flash, Gemini Embedding, Gemini Live API (voice), Brave Search, AliExpress TOP API, GCP Cloud Run, Secret Manager, Workload Identity Federation.
