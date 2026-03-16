@@ -103,6 +103,8 @@ interface SidepanelStateValue {
   voiceInputTranscript: string;
   voiceOutputTranscript: string;
   voiceError: string | null;
+  voiceToolResultBatches: RankedResult[][];
+  voiceToolActivity: { active: boolean; toolName: string | null };
   startVoice: () => Promise<void>;
   pauseVoice: () => void;
   endVoiceSession: () => void;
@@ -427,6 +429,8 @@ export function SidepanelStateProvider({
       ? viewState.product
       : null;
   const currentResponse = viewState.view === "results" ? viewState.response : null;
+  const [voiceSearchResults, setVoiceSearchResults] = useState<RankedResult[]>([]);
+  const [voiceToolResultBatches, setVoiceToolResultBatches] = useState<RankedResult[][]>([]);
   const chatFocusOptions = useMemo<ChatFocusOption[]>(() => {
     const options: ChatFocusOption[] = [];
 
@@ -456,8 +460,20 @@ export function SidepanelStateProvider({
       product: toResultProductContext(ranked),
     })));
 
+    // Add voice-discovered results
+    options.push(...voiceSearchResults.map((ranked) => ({
+      id: `voice-${ranked.result.id}`,
+      kind: "result" as const,
+      label: ranked.result.title,
+      subtitle: `${ranked.result.marketplace} (voice)`,
+      imageUrl: ranked.result.imageUrl,
+      priceLabel: toPriceLabel(ranked.result.price, ranked.result.currency),
+      productUrl: ranked.result.productUrl,
+      product: toResultProductContext(ranked),
+    })));
+
     return options;
-  }, [currentProduct, displayResults]);
+  }, [currentProduct, displayResults, voiceSearchResults]);
 
   useEffect(() => {
     if (chatFocusOptions.length === 0) {
@@ -578,6 +594,15 @@ export function SidepanelStateProvider({
     });
   }, []);
 
+  const handleVoiceToolResult = useCallback((results: RankedResult[]) => {
+    setVoiceSearchResults((prev) => {
+      const existingUrls = new Set(prev.map((r) => r.result.productUrl));
+      const newResults = results.filter((r) => !existingUrls.has(r.result.productUrl));
+      return [...prev, ...newResults];
+    });
+    setVoiceToolResultBatches((prev) => [...prev, results]);
+  }, []);
+
   const voiceContext = useMemo(() => ({
     focusedProduct: selectedChatFocus ? {
       ...selectedChatFocus.product,
@@ -592,6 +617,7 @@ export function SidepanelStateProvider({
     } : null,
     focusMode: selectedChatFocus?.kind ?? null,
     guidance: "Answer about the focused item first unless the user explicitly asks to compare multiple options.",
+    allResults: currentResponse?.results ?? [],
     results: displayResults.slice(0, 5).map((r) => ({
       rank: r.rank,
       title: r.result.title,
@@ -601,12 +627,13 @@ export function SidepanelStateProvider({
       productUrl: r.result.productUrl,
       confidence: r.confidence,
     })),
-  }), [currentProduct, displayResults, selectedChatFocus]);
+  }), [currentProduct, currentResponse, displayResults, selectedChatFocus]);
 
   const voice = useVoice({
     backendUrl: BACKEND_WS_URL,
     context: voiceContext,
     onConversationCommit: commitVoiceConversation,
+    onToolResult: handleVoiceToolResult,
   });
 
   const wrappedStartVoice = useCallback(async () => {
@@ -620,6 +647,8 @@ export function SidepanelStateProvider({
   const wrappedEndVoice = useCallback(() => {
     voice.endSession();
     voiceSessionContextRef.current = null;
+    setVoiceSearchResults([]);
+    setVoiceToolResultBatches([]);
   }, [voice.endSession]);
 
   useEffect(() => {
@@ -665,6 +694,8 @@ export function SidepanelStateProvider({
     voiceInputTranscript: voice.inputTranscript,
     voiceOutputTranscript: voice.outputTranscript,
     voiceError: voice.error,
+    voiceToolResultBatches,
+    voiceToolActivity: voice.toolActivity,
     startVoice: wrappedStartVoice,
     pauseVoice: voice.pauseMic,
     endVoiceSession: wrappedEndVoice,
@@ -692,6 +723,8 @@ export function SidepanelStateProvider({
     voice.inputTranscript,
     voice.outputTranscript,
     voice.error,
+    voiceToolResultBatches,
+    voice.toolActivity,
     wrappedStartVoice,
     voice.pauseMic,
     wrappedEndVoice,

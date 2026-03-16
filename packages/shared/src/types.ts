@@ -284,4 +284,8 @@ export type WsServerMessage =
   | { type: "turn_complete" }
   | { type: "go_away"; timeLeftMs: number }
   | { type: "session_resumption"; token: string }
+  | { type: "tool_start"; toolName: string; toolCallId: string }
+  | { type: "tool_result"; toolName: string; toolCallId: string; results: RankedResult[] }
+  | { type: "tool_done"; toolCallId: string }
+  | { type: "tool_cancelled"; toolCallId: string }
   | { type: "error"; message: string };
