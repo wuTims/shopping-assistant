@@ -1,0 +1,72 @@
+graph TB
+    subgraph Extension["Chrome Extension (Manifest V3)"]
+        CS["Content Script<br/><i>DOM heuristics</i><br/><i>Product detection</i><br/><i>Overlay icon injection</i>"]
+        SW["Service Worker<br/><i>Message routing</i><br/><i>Cache management</i>"]
+        SP["Side Panel<br/><i>Results display</i><br/><i>Chat (text + voice)</i>"]
+        Cache["chrome.storage.local<br/><i>Cached searches</i><br/><i>TTL: 1 hour, max 50</i>"]
+    end
+
+    subgraph CloudRun["Cloud Run Backend (TypeScript / Hono)"]
+        REST["REST API<br/><i>POST /search</i><br/><i>POST /chat</i><br/><i>POST /identify</i>"]
+
+        subgraph Pipeline["Search Pipeline (20s budget)"]
+            direction TB
+            ID["Phase 1: Identify<br/><i>Gemini 2.5 Flash</i><br/><i>Image → product analysis</i><br/><i>+ search query generation</i>"]
+
+            subgraph Parallel["Phase 2: Search (parallel)"]
+                BR["Brave Search<br/><i>Web + Image search</i><br/><i>AI + marketplace queries</i>"]
+                AE["AliExpress API<br/><i>Text + image search</i><br/><i>HMAC-signed TOP API</i>"]
+            end
+
+            MERGE["Phase 3: Merge + Dedup<br/><i>URL + title dedup</i><br/><i>Heuristic pre-sort</i><br/><i>Diversity cap → 15</i>"]
+
+            subgraph Enrich["Phase 3.5: Enrich (parallel)"]
+                PRICE["Price Extraction<br/><i>HTTP → JSON-LD / meta</i><br/><i>Stale link detection</i>"]
+                EMBED["Visual Embedding<br/><i>gemini-embedding-2-preview</i><br/><i>256-dim cosine similarity</i>"]
+            end
+
+            RANK["Phase 4: Rank<br/><i>60% text + 40% visual</i><br/><i>Confidence scoring</i><br/><i>Backfill to 10 results</i>"]
+        end
+
+        WS["WebSocket /live<br/><i>Gemini Live API proxy</i><br/><i>Bidirectional audio</i>"]
+    end
+
+    subgraph GCP["Google Cloud Platform"]
+        SM["Secret Manager<br/><i>API keys + tokens</i><br/><i>AliExpress write-back</i>"]
+        AR["Artifact Registry<br/><i>Docker images</i><br/><i>SHA-tagged</i>"]
+    end
+
+    CS -->|"click event + DetectedProduct"| SW
+    SW -->|"cache check"| Cache
+    SW -->|"SearchRequest"| REST
+    REST --> ID
+    ID --> BR
+    ID --> AE
+    BR --> MERGE
+    AE --> MERGE
+    MERGE --> PRICE
+    MERGE --> EMBED
+    PRICE --> RANK
+    EMBED --> RANK
+    RANK -->|"SearchResponse"| SW
+    SW -->|"RankedResult[]"| SP
+    SP -->|"POST /chat"| REST
+    REST -->|"chat reply"| SP
+    SP <-->|"WSS audio + text"| WS
+
+    CloudRun -.->|"reads secrets"| SM
+    AR -.->|"deploys image"| CloudRun
+
+    classDef extension fill:#f0f9ff,stroke:#3b82f6,color:#1e293b
+    classDef backend fill:#fefce8,stroke:#eab308,color:#1e293b
+    classDef pipeline fill:#f0fdf4,stroke:#22c55e,color:#1e293b
+    classDef search fill:#faf5ff,stroke:#a855f7,color:#1e293b
+    classDef enrich fill:#fff7ed,stroke:#f97316,color:#1e293b
+    classDef gcp fill:#fef2f2,stroke:#ef4444,color:#1e293b
+
+    class CS,SW,SP,Cache extension
+    class REST,WS backend
+    class ID,MERGE,RANK pipeline
+    class BR,AE search
+    class PRICE,EMBED enrich
+    class SM,AR gcp
