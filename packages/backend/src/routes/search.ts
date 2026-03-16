@@ -4,7 +4,7 @@ import {
   SEARCH_TIMEOUT_MS,
   MAX_RESULTS_FOR_RANKING,
   MAX_PRICE_FALLBACK_RESULTS,
-  PRICE_FALLBACK_TIMEOUT_MS,
+  PRICE_HTTP_TIMEOUT_MS,
   EMBEDDING_TIMEOUT_MS,
   MIN_CONFIDENCE_SCORE,
 } from "@shopping-assistant/shared";
@@ -16,7 +16,7 @@ import {
 import type { FetchedImage } from "../services/gemini.js";
 import { searchProducts, searchImages } from "../services/brave.js";
 import { searchAliExpressSplit } from "../services/aliexpress.js";
-import { fillMissingPrices } from "../services/price-fallback.js";
+import { quickHttpPriceEnrich } from "../services/price-fallback.js";
 import { generateMarketplaceQueries } from "../utils/marketplace-queries.js";
 import { extractMarketplace } from "../utils/marketplace.js";
 import type { ProviderSearchOutcome, ProviderStatus } from "../services/provider-outcome.js";
@@ -307,15 +307,22 @@ searchRoute.post("/", async (c) => {
   // Filter out the exact source product URL — users don't want to see the item they're already viewing.
   // Intentionally strips ALL query params (not just tracking params like normalizeUrl does) for
   // aggressive matching — false positives are acceptable since users never want their own product.
+  // Also checks productLink — on listing pages, sourceUrl is the page URL (e.g. homepage)
+  // while productLink is the actual product detail URL extracted from the <a> wrapping the image.
   const sourceNormalized = body.sourceUrl.split("?")[0].toLowerCase().replace(/\/$/, "");
+  const productLinkNormalized = body.productLink
+    ? body.productLink.split("?")[0].toLowerCase().replace(/\/$/, "")
+    : null;
   const filtered = deduped.filter((r) => {
     const normalized = r.productUrl.split("?")[0].toLowerCase().replace(/\/$/, "");
-    return normalized !== sourceNormalized;
+    if (normalized === sourceNormalized) return false;
+    if (productLinkNormalized && normalized === productLinkNormalized) return false;
+    return true;
   }).filter(isDisplayableCandidate);
   const laneDiagnostics = countResultsByLane(filtered);
 
   const preSorted = heuristicPreSort(filtered, identification, body.price, sourceMarketplace);
-  const capped = diversityCap(preSorted, MAX_RESULTS_FOR_RANKING, sourceMarketplace);
+  let capped = diversityCap(preSorted, MAX_RESULTS_FOR_RANKING, sourceMarketplace);
 
   // ── Source attribution logging ──────────────────────────────────────────
   console.log(
@@ -345,54 +352,64 @@ searchRoute.post("/", async (c) => {
     console.log(`[search:${requestId}]   [${r.source}] "${r.title.slice(0, 80)}" price=${r.price ?? "N/A"} url=${r.productUrl.slice(0, 100)}`);
   }
 
-  // ── Phase 3.5: price fallback — screenshot + Gemini Vision for top results missing prices ──
-  if (remaining() > PRICE_FALLBACK_TIMEOUT_MS + 2000) {
-    try {
-      const extractedPrices = await withTimeout(
-        fillMissingPrices(capped, MAX_PRICE_FALLBACK_RESULTS),
-        PRICE_FALLBACK_TIMEOUT_MS,
-      );
-      for (const [id, { price, currency }] of extractedPrices) {
-        const result = capped.find((r) => r.id === id);
-        if (result) {
-          result.price = price;
-          result.currency = currency;
-          result.priceSource = "fallback_screenshot";
-        }
+  // ── Phase 3.5: parallel HTTP price enrichment + visual embedding ────────────
+  // Quick HTTP extraction (JSON-LD/meta tags) + dead link detection runs in
+  // parallel with visual embedding. Both take ~2s so we save time vs sequential.
+  const enrichStart = Date.now();
+  const [quickEnrichResult, visualScoresResult] = await Promise.allSettled([
+    withTimeout(
+      quickHttpPriceEnrich(capped, MAX_PRICE_FALLBACK_RESULTS),
+      PRICE_HTTP_TIMEOUT_MS + 1000,
+    ),
+    originalImage && remaining() > EMBEDDING_TIMEOUT_MS + 1000
+      ? withTimeout(computeVisualSimilarityScores(originalImage, capped), EMBEDDING_TIMEOUT_MS)
+      : Promise.resolve({} as Record<string, number>),
+  ]);
+
+  // Apply quick enrichment: fill prices + remove dead links
+  if (quickEnrichResult.status === "fulfilled") {
+    const { prices, deadLinks } = quickEnrichResult.value;
+    for (const [id, { price, currency }] of prices) {
+      const result = capped.find((r) => r.id === id);
+      if (result) {
+        result.price = price;
+        result.currency = currency;
+        result.priceSource = "fallback_http";
       }
-      console.log(`[search:${requestId}] Price fallback filled ${extractedPrices.size} prices`);
-    } catch (err) {
-      console.warn("[search] Price fallback timed out or failed:", err);
+    }
+    if (deadLinks.size > 0) {
+      for (const id of deadLinks) {
+        const r = capped.find((r) => r.id === id);
+        if (r) console.log(`[search:${requestId}] Removed dead link: "${r.title.slice(0, 60)}" ${r.productUrl.slice(0, 80)}`);
+      }
+      capped = capped.filter((r) => !deadLinks.has(r.id));
+    }
+    console.log(
+      `[search:${requestId}] Quick HTTP enrichment: ${prices.size} prices, ${deadLinks.size} dead links in ${Date.now() - enrichStart}ms`,
+    );
+  } else {
+    console.warn(`[search:${requestId}] Quick enrichment failed:`, quickEnrichResult.reason);
+  }
+
+  let visualScores: Record<string, number> = {};
+  if (visualScoresResult.status === "fulfilled") {
+    visualScores = visualScoresResult.value;
+    if (Object.keys(visualScores).length > 0) {
+      console.log(`[search:${requestId}] Embedding scored ${Object.keys(visualScores).length} results`);
     }
   } else {
-    console.log("[search] Skipping price fallback — insufficient time remaining");
+    console.warn(`[search:${requestId}] Embedding scoring failed:`, visualScoresResult.reason);
   }
 
   if (abortController.signal.aborted) {
-    console.warn(`[search:${requestId}] Aborted after price fallback (${Date.now() - searchStart}ms)`);
+    console.warn(`[search:${requestId}] Aborted after enrichment (${Date.now() - searchStart}ms)`);
     return c.json({ error: "timeout", message: "Search request timed out", requestId }, 504);
-  }
-
-  // ── Phase 3.75: embedding-based visual similarity ─────────────────────────
-  let visualScores: Record<string, number> = {};
-  if (originalImage && remaining() > EMBEDDING_TIMEOUT_MS + 1000) {
-    try {
-      visualScores = await withTimeout(
-        computeVisualSimilarityScores(originalImage, capped),
-        EMBEDDING_TIMEOUT_MS,
-      );
-      console.log(`[search:${requestId}] Embedding scored ${Object.keys(visualScores).length} results`);
-    } catch (err) {
-      console.warn(`[search:${requestId}] Embedding scoring failed:`, err);
-    }
-  } else {
-    console.log(`[search:${requestId}] Skipping embedding — ${originalImage ? "insufficient time" : "no original image"}`);
   }
 
   // ── Phase 4: ranking ─────────────────────────────────────────────────────
 
   const rankStart = Date.now();
-  const textScores = buildFallbackScores(capped, identification, sourceMarketplace);
+  const textScores = buildFallbackScores(capped, identification, sourceMarketplace, body.price);
   const scores = Object.keys(visualScores).length > 0
     ? blendScores(textScores, visualScores)
     : textScores;
@@ -496,12 +513,48 @@ searchRoute.post("/", async (c) => {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * Known marketplace suffixes to strip from page titles.
+ * Extended to cover all major marketplaces we encounter.
+ */
+const TITLE_MARKETPLACE_SUFFIX_RE =
+  /\s*[-–|:]\s*(Amazon|eBay|Walmart|Target|Best Buy|Etsy|AliExpress|Macy'?s|Nordstrom|Kohl'?s|Zappos|DHgate|Temu|Revolve|Francesca'?s).*$/i;
+
+/**
+ * Detect generic page titles that are site homepages / taglines rather than
+ * product names (e.g. "Electronics, Cars, Fashion, Collectibles & More").
+ */
+const GENERIC_TITLE_RE =
+  /^(electronics|shop\b|shopping|browse|deals|welcome|home|search|new arrivals|trending|sale|best sellers)/i;
+const BACKEND_CATEGORY_LIST_RE = /^[\w\s]+,\s*[\w\s]+,\s*[\w\s]+/;
+
+/**
+ * DOM text that is clearly NOT a product title — image gallery indicators,
+ * navigation / pagination fragments, alt text from gallery thumbnails, etc.
+ */
+const NON_PRODUCT_TITLE_RE =
+  /^(picture|image|photo|slide|view|thumbnail|img)\s+\d+\s*(of|\/)\s*\d+$/i;
+
+/**
+ * Titles that look like raw DOM/accessibility artefacts rather than
+ * product names — numbered labels, single words, bare dimensions, etc.
+ */
+const DOM_ARTEFACT_RE =
+  /^\d+\s*(of|\/)\s*\d+$|^(close|next|prev(ious)?|back|menu|loading|untitled|null|undefined)$/i;
+
 function buildTitleQueries(title: string | null, sourceUrl: string): string[] {
   if (!title) return [];
-  // Build 1-2 queries from the page title
+  const cleaned = title.replace(TITLE_MARKETPLACE_SUFFIX_RE, "").trim();
+
+  // Skip generic page titles (homepages, category lists)
+  if (cleaned.length < 5) return [];
+  if (GENERIC_TITLE_RE.test(cleaned)) return [];
+  if (BACKEND_CATEGORY_LIST_RE.test(cleaned)) return [];
+  // Skip image gallery indicators and DOM artefacts
+  if (NON_PRODUCT_TITLE_RE.test(cleaned)) return [];
+  if (DOM_ARTEFACT_RE.test(cleaned)) return [];
+
   const queries = [title];
-  // Add a shorter query stripping common suffixes like "- Amazon.com"
-  const cleaned = title.replace(/\s*[-|]\s*(Amazon|eBay|Walmart|Target|Best Buy).*$/i, "").trim();
   if (cleaned !== title && cleaned.length > 10) {
     queries.push(`${cleaned} buy online`);
   }

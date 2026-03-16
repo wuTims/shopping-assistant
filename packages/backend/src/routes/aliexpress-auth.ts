@@ -14,8 +14,8 @@ const OP_BASE_URL = "https://api-sg.aliexpress.com/rest";
 let refreshToken = process.env.ALIEXPRESS_REFRESH_TOKEN ?? "";
 let refreshTokenExpiry = Number(process.env.ALIEXPRESS_REFRESH_TOKEN_EXPIRY) || 0;
 
-// Auto-refresh: refresh 5 days before access token expires
-const REFRESH_BUFFER_MS = 5 * 24 * 60 * 60 * 1000;
+// Auto-refresh: refresh when 80% of the token lifetime has elapsed
+const REFRESH_LIFETIME_FRACTION = 0.8;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const aliexpressAuthRoute = new Hono();
@@ -290,15 +290,16 @@ function scheduleTokenRefresh(accessTokenExpiresAt: number): void {
     return;
   }
 
-  // Refresh 5 days before expiry, but at least 1 minute from now
+  // Refresh after 80% of the token lifetime has elapsed, but at least 1 minute from now
+  const totalLifetimeMs = accessTokenExpiresAt - Date.now();
   const refreshAt = Math.max(
-    accessTokenExpiresAt - REFRESH_BUFFER_MS,
+    Date.now() + totalLifetimeMs * REFRESH_LIFETIME_FRACTION,
     Date.now() + 60_000,
   );
   const delayMs = refreshAt - Date.now();
-  const delayDays = (delayMs / (24 * 60 * 60 * 1000)).toFixed(1);
+  const delayHours = (delayMs / (60 * 60 * 1000)).toFixed(1);
 
-  console.log(`[aliexpress-auth] Auto-refresh scheduled in ${delayDays} days`);
+  console.log(`[aliexpress-auth] Auto-refresh scheduled in ${delayHours} hours`);
 
   refreshTimer = setTimeout(async () => {
     console.log("[aliexpress-auth] Auto-refreshing token...");

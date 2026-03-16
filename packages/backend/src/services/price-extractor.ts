@@ -3,10 +3,43 @@ import { PRICE_HTTP_TIMEOUT_MS } from "@shopping-assistant/shared";
 const FETCH_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+/**
+ * Patterns in visible page text that indicate a product is stale/unavailable.
+ * These sites return HTTP 200 but show "unavailable" in the body.
+ */
+const STALE_BODY_PATTERNS = [
+  /sorry,?\s*this\s+item\s+is\s+(currently\s+)?unavailable/i,
+  /this\s+(product|item)\s+is\s+(currently\s+)?(no longer|not)\s+available/i,
+  /this\s+(product|item)\s+(has been|was)\s+(removed|discontinued)/i,
+  /oops!?\s*that['']?s?\s+out\s+of\s+stock/i, // Zappos
+  /currently\s+unavailable\.?\s*highly\s+related/i, // DHGate
+  /this\s+page\s+(doesn['']?t|does not|no longer)\s+exist/i,
+  /the\s+item\s+you['']?(re| are)\s+(looking|searching)\s+for\s+(has been|is no longer)/i,
+  // Amazon: "Currently unavailable. We don't know when or if this item will be back in stock."
+  /currently\s+unavailable[\s\S]{0,200}we\s+don[''\u2019]?t\s+know\s+when/i,
+  // Lowes: "we couldn't find that page" / "this item is unavailable"
+  /we\s+(couldn[''\u2019]?t|could\s+not)\s+find\s+(that|this)\s+(page|product|item)/i,
+  // Lowes: "This item is no longer sold on Lowes.com"
+  /this\s+item\s+is\s+no\s+longer\s+sold/i,
+  // Etsy: "Sorry, this item and shop are currently unavailable"
+  /sorry,?\s*this\s+item\s+and\s+shop\s+are?\s+(currently\s+)?unavailable/i,
+  // Generic 404 / removed patterns
+  /page\s+(not\s+found|cannot\s+be\s+found|you\s+requested\s+(was|is)\s+not\s+found)/i,
+];
+
+/** Check if HTML body contains signals that the product is stale/unavailable. */
+export function detectStaleContent(html: string): boolean {
+  // Strip scripts and styles to avoid false positives from JS code
+  const visible = html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "");
+  return STALE_BODY_PATTERNS.some((pattern) => pattern.test(visible));
+}
+
 /** Fetch a URL via lightweight HTTP and extract price from structured data in HTML. */
 export async function fetchAndExtractPrice(
   url: string,
-): Promise<{ price: number | null; currency: string | null }> {
+): Promise<{ price: number | null; currency: string | null; httpStatus: number | null; stale?: boolean }> {
   try {
     const res = await fetch(url, {
       headers: {
@@ -17,12 +50,19 @@ export async function fetchAndExtractPrice(
       redirect: "follow",
     });
 
-    if (!res.ok) return { price: null, currency: null };
+    if (!res.ok) return { price: null, currency: null, httpStatus: res.status };
 
     const html = await res.text();
-    return extractPriceFromHtml(html);
+    const stale = detectStaleContent(html);
+    if (stale) {
+      console.log(`[price-extract] Stale content detected: ${new URL(url).hostname}`);
+      return { price: null, currency: null, httpStatus: res.status, stale: true };
+    }
+
+    const result = extractPriceFromHtml(html);
+    return { ...result, httpStatus: res.status };
   } catch {
-    return { price: null, currency: null };
+    return { price: null, currency: null, httpStatus: null };
   }
 }
 
@@ -37,14 +77,28 @@ export function extractPriceFromHtml(
     return jsonLdResult;
   }
 
-  // Strategy 2: Meta tags (Open Graph, product)
+  // Strategy 2: Microdata (itemprop="price" / itemprop="priceCurrency")
+  const microdataResult = extractFromMicrodata(html);
+  if (microdataResult.price !== null) {
+    console.log(`[price-extract] Microdata: ${microdataResult.currency}${microdataResult.price}`);
+    return microdataResult;
+  }
+
+  // Strategy 3: Meta tags (Open Graph, product)
   const metaResult = extractFromMetaTags(html);
   if (metaResult.price !== null) {
     console.log(`[price-extract] Meta tag: ${metaResult.currency}${metaResult.price}`);
     return metaResult;
   }
 
-  // Strategy 3: Regex on visible text (least reliable)
+  // Strategy 4: Embedded script data (__NEXT_DATA__, React hydration, etc.)
+  const embeddedResult = extractFromEmbeddedScripts(html);
+  if (embeddedResult.price !== null) {
+    console.log(`[price-extract] Embedded script: ${embeddedResult.currency}${embeddedResult.price}`);
+    return embeddedResult;
+  }
+
+  // Strategy 5: Regex on visible text (least reliable)
   return extractFromRegex(html);
 }
 
@@ -141,6 +195,60 @@ function extractPriceFromOffer(
   return { price: null, currency: null };
 }
 
+// ── Microdata (itemprop) ─────────────────────────────────────────────────────
+
+// itemprop="price" with content attribute: <meta itemprop="price" content="499.00">
+const MICRODATA_PRICE_CONTENT_RE =
+  /<[^>]+itemprop\s*=\s*["']price["'][^>]+content\s*=\s*["']([^"']+)["']/i;
+const MICRODATA_PRICE_CONTENT_REV_RE =
+  /<[^>]+content\s*=\s*["']([^"']+)["'][^>]+itemprop\s*=\s*["']price["']/i;
+
+// itemprop="price" with text content: <span itemprop="price">$499.00</span>
+const MICRODATA_PRICE_TEXT_RE =
+  /<[^>]+itemprop\s*=\s*["']price["'][^>]*>([^<]+)</i;
+
+// itemprop="priceCurrency" with content attribute
+const MICRODATA_CURRENCY_RE =
+  /<[^>]+itemprop\s*=\s*["']priceCurrency["'][^>]+content\s*=\s*["']([^"']+)["']/i;
+const MICRODATA_CURRENCY_REV_RE =
+  /<[^>]+content\s*=\s*["']([^"']+)["'][^>]+itemprop\s*=\s*["']priceCurrency["']/i;
+
+function extractFromMicrodata(
+  html: string,
+): { price: number | null; currency: string | null } {
+  // Try content attribute first (most reliable — numeric value, no parsing needed)
+  let priceStr: string | null = null;
+
+  const contentMatch = html.match(MICRODATA_PRICE_CONTENT_RE)
+    ?? html.match(MICRODATA_PRICE_CONTENT_REV_RE);
+  if (contentMatch) {
+    priceStr = contentMatch[1];
+  }
+
+  // Fall back to element text content: <span itemprop="price">$499.00</span>
+  if (!priceStr) {
+    const textMatch = html.match(MICRODATA_PRICE_TEXT_RE);
+    if (textMatch) {
+      const text = textMatch[1].trim();
+      // Extract numeric value from text like "$499.00", "499.00", "US $260.83"
+      const numMatch = text.match(/[\d,]+(?:\.\d{1,2})?/);
+      if (numMatch) priceStr = numMatch[0];
+    }
+  }
+
+  if (!priceStr) return { price: null, currency: null };
+
+  const price = toNumber(priceStr);
+  if (price === null) return { price: null, currency: null };
+
+  // Extract currency
+  const currMatch = html.match(MICRODATA_CURRENCY_RE)
+    ?? html.match(MICRODATA_CURRENCY_REV_RE);
+  const currency = currMatch?.[1] ?? null;
+
+  return { price, currency };
+}
+
 // ── Meta Tags ────────────────────────────────────────────────────────────────
 
 const META_PRICE_RE =
@@ -225,6 +333,81 @@ function extractFromRegex(
 
     console.log(`[price-extract] Regex: matched ${currency}${bestPrice} (${bestCount}x from ${allMatches.length} candidates)`);
     return { price: bestPrice, currency };
+  }
+
+  return { price: null, currency: null };
+}
+
+// ── Embedded Script Data ──────────────────────────────────────────────────
+
+/**
+ * Extract price from embedded JSON data in script tags.
+ * Modern sites (Walmart, Home Depot, etc.) often embed product data in
+ * __NEXT_DATA__ (Next.js) or similar hydration scripts rather than
+ * standard JSON-LD / microdata.
+ */
+function extractFromEmbeddedScripts(
+  html: string,
+): { price: number | null; currency: string | null } {
+  // Pattern 1: Next.js __NEXT_DATA__ JSON blob
+  const nextDataMatch = html.match(
+    /<script\s+id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/i,
+  );
+  if (nextDataMatch) {
+    const result = searchScriptForPrice(nextDataMatch[1]);
+    if (result.price !== null) return result;
+  }
+
+  // Pattern 2: window.__PRELOADED_STATE__ / __INITIAL_STATE__
+  const stateMatches = html.matchAll(
+    /window\.__(?:PRELOADED_STATE|INITIAL_STATE|INITIAL_DATA)__\s*=\s*([\s\S]*?);?\s*<\/script>/gi,
+  );
+  for (const [, content] of stateMatches) {
+    const result = searchScriptForPrice(content);
+    if (result.price !== null) return result;
+  }
+
+  return { price: null, currency: null };
+}
+
+/**
+ * Search a serialized JSON string for common e-commerce price field patterns.
+ * Uses targeted regexes on the raw text to avoid parsing multi-megabyte blobs.
+ */
+function searchScriptForPrice(
+  text: string,
+): { price: number | null; currency: string | null } {
+  // Try to find currency first (reused across patterns)
+  const findCurrency = (): string | null => {
+    const m = text.match(/"(?:price)?[Cc]urrency(?:Code)?":\s*"([A-Z]{3})"/);
+    return m?.[1] ?? null;
+  };
+
+  // "priceString":"$11.49" / "formattedPrice":"$949.04" — very reliable
+  const formattedMatch = text.match(
+    /"(?:priceString|formattedPrice|displayPrice)":\s*"[£€$]?\s*([\d,]+(?:\.\d{1,2})?)"/,
+  );
+  if (formattedMatch) {
+    const price = parseFloat(formattedMatch[1].replace(/,/g, ""));
+    if (isFinite(price) && price > 0) return { price, currency: findCurrency() };
+  }
+
+  // "currentPrice":{"price":11.49,...} — Walmart nested pattern
+  const nestedMatch = text.match(
+    /"currentPrice":\s*\{[^}]*?"price":\s*"?([\d]+(?:\.[\d]{1,2})?)"?/,
+  );
+  if (nestedMatch) {
+    const price = parseFloat(nestedMatch[1]);
+    if (isFinite(price) && price > 0) return { price, currency: findCurrency() };
+  }
+
+  // "salePrice" / "offerPrice" / "finalPrice" / "specialPrice" — flat fields
+  const flatMatch = text.match(
+    /"(?:salePrice|offerPrice|finalPrice|specialPrice)":\s*"?([\d]+(?:\.[\d]{1,2})?)"?/,
+  );
+  if (flatMatch) {
+    const price = parseFloat(flatMatch[1]);
+    if (isFinite(price) && price > 0) return { price, currency: findCurrency() };
   }
 
   return { price: null, currency: null };

@@ -6,7 +6,7 @@ const generateImageSearchQueriesMock = vi.fn();
 const searchProductsMock = vi.fn();
 const searchImagesMock = vi.fn();
 const searchAliExpressSplitMock = vi.fn();
-const fillMissingPricesMock = vi.fn();
+const quickHttpPriceEnrichMock = vi.fn();
 const generateMarketplaceQueriesMock = vi.fn();
 const extractMarketplaceMock = vi.fn();
 const computeVisualSimilarityScoresMock = vi.fn();
@@ -33,7 +33,7 @@ vi.mock("../../services/aliexpress.js", () => ({
 }));
 
 vi.mock("../../services/price-fallback.js", () => ({
-  fillMissingPrices: fillMissingPricesMock,
+  quickHttpPriceEnrich: quickHttpPriceEnrichMock,
 }));
 
 vi.mock("../../utils/marketplace-queries.js", () => ({
@@ -100,14 +100,14 @@ describe("/search route validation metadata", () => {
     searchProductsMock.mockReset();
     searchImagesMock.mockReset();
     searchAliExpressSplitMock.mockReset();
-    fillMissingPricesMock.mockReset();
+    quickHttpPriceEnrichMock.mockReset();
     generateMarketplaceQueriesMock.mockReset();
     extractMarketplaceMock.mockReset();
     computeVisualSimilarityScoresMock.mockReset();
 
     extractMarketplaceMock.mockReturnValue("Walmart");
     generateMarketplaceQueriesMock.mockReturnValue([]);
-    fillMissingPricesMock.mockResolvedValue(new Map());
+    quickHttpPriceEnrichMock.mockResolvedValue({ prices: new Map(), deadLinks: new Set() });
     computeVisualSimilarityScoresMock.mockResolvedValue({});
     searchAliExpressSplitMock.mockResolvedValue(splitOutcome([], []));
     searchProductsMock.mockResolvedValue(providerOutcome([]));

@@ -57,6 +57,10 @@ export interface SearchRequest {
   price: number | null;
   currency: string | null;
   sourceUrl: string;
+  /** Product detail URL extracted from the <a> wrapping the clicked image.
+   *  On listing pages, sourceUrl is the page URL (e.g. the marketplace homepage)
+   *  while productLink is the actual product URL — used for same-item filtering. */
+  productLink?: string | null;
   /** Pre-computed identification from /identify — skips redundant Gemini call in /search */
   identification?: ProductIdentification | null;
 }
@@ -97,7 +101,7 @@ export type ResultUrlClassification =
 export type ResultPriceSource =
   | "provider_structured"
   | "provider_snippet"
-  | "fallback_screenshot"
+  | "fallback_http"
   | "none";
 
 export type ResultValidationStatus = "valid" | "invalid" | "unknown";

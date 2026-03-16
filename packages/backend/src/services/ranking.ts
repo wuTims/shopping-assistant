@@ -75,7 +75,12 @@ export function applyRanking(
       if (priceDelta! < 0) {
         notes.push(`${Math.abs(savingsPercent!).toFixed(0)}% cheaper`);
       } else if (priceDelta! > 0) {
-        notes.push(`${savingsPercent!.toFixed(0)}% more expensive`);
+        if (savingsPercent! <= 50) {
+          notes.push(`${savingsPercent!.toFixed(0)}% more expensive`);
+        } else {
+          const priceStr = formatPrice(result.price, result.currency);
+          notes.push(`Higher-priced alternative (${priceStr})`);
+        }
       } else {
         notes.push("Same price");
       }
@@ -100,8 +105,15 @@ export function applyRanking(
     }
   }
 
-  // Sort both buckets by confidence score (desc), then savings (desc)
+  // Sort: demote very expensive items (>2x original), then by confidence (desc), then savings (desc)
+  const isVeryExpensive = (r: RankedResult) =>
+    originalPrice !== null && r.result.price !== null && r.result.price > originalPrice * 2;
+
   const sortFn = (a: RankedResult, b: RankedResult) => {
+    const aExpensive = isVeryExpensive(a) ? 1 : 0;
+    const bExpensive = isVeryExpensive(b) ? 1 : 0;
+    if (aExpensive !== bExpensive) return aExpensive - bExpensive;
+
     if (b.confidenceScore !== a.confidenceScore) {
       return b.confidenceScore - a.confidenceScore;
     }
@@ -131,6 +143,7 @@ export function buildFallbackScores(
   results: SearchResult[],
   identification: ProductIdentification,
   sourceMarketplace: string | null = null,
+  originalPrice: number | null = null,
 ): Record<string, number> {
   const scores: Record<string, number> = {};
   const brand = identification.brand?.toLowerCase().trim() ?? null;
@@ -164,7 +177,8 @@ export function buildFallbackScores(
       sourceMarketplace && baseMarketplace(result.marketplace) === baseMarketplace(sourceMarketplace)
         ? SOURCE_MARKETPLACE_PENALTY
         : 0;
-    const rawScore = 0.12 + overlapRatio * 0.55 + brandBoost + categoryBoost + richnessBoost + hybridBoost - sourcePenalty;
+    const pricePenalty = computePricePenalty(originalPrice, result.price);
+    const rawScore = 0.12 + overlapRatio * 0.55 + brandBoost + categoryBoost + richnessBoost + hybridBoost - sourcePenalty - pricePenalty;
 
     scores[result.id] = clamp(rawScore, 0, 0.95);
 
@@ -173,6 +187,7 @@ export function buildFallbackScores(
       `overlap=${overlap}/${referenceTokens.size} (${(overlapRatio * 100).toFixed(0)}%) ` +
       `brand=${brandBoost.toFixed(2)} cat=${categoryBoost.toFixed(2)} rich=${richnessBoost.toFixed(2)} hybrid=${hybridBoost.toFixed(2)} ` +
       `src=${sourcePenalty > 0 ? `-${sourcePenalty.toFixed(2)}` : "0.00"} ` +
+      `price=${pricePenalty > 0 ? `-${pricePenalty.toFixed(2)}` : "0.00"} ` +
       `→ ${scores[result.id].toFixed(3)} [${matchedTokens.join(",")}]`,
     );
   }
@@ -400,6 +415,29 @@ function scoreToConfidence(score: number): "high" | "medium" | "low" {
   return "low";
 }
 
+/**
+ * Graduated penalty for results significantly more expensive than the original.
+ * No penalty up to 1.5x. Ramps linearly from 0 at 1.5x to 0.30 at 5x+.
+ *
+ * Examples (originalPrice = $100):
+ *   $100 (1.0x) → 0.00    $150 (1.5x) → 0.00
+ *   $200 (2.0x) → 0.043   $300 (3.0x) → 0.129
+ *   $400 (4.0x) → 0.214   $500+ (5x+) → 0.30
+ */
+function computePricePenalty(
+  originalPrice: number | null,
+  resultPrice: number | null,
+): number {
+  if (originalPrice === null || resultPrice === null || originalPrice <= 0) return 0;
+  const ratio = resultPrice / originalPrice;
+  if (ratio <= 1.5) return 0;
+  // Linear ramp: 0 at 1.5x → MAX_PRICE_PENALTY at 5x, capped beyond 5x
+  const MAX_PRICE_PENALTY = 0.30;
+  const penaltyRange = 5.0 - 1.5; // 3.5
+  const excess = Math.min(ratio - 1.5, penaltyRange);
+  return (excess / penaltyRange) * MAX_PRICE_PENALTY;
+}
+
 function computePriceDelta(
   originalPrice: number | null,
   resultPrice: number | null,
@@ -410,6 +448,13 @@ function computePriceDelta(
   const delta = resultPrice - originalPrice;
   const percent = (delta / originalPrice) * 100;
   return { priceDelta: delta, savingsPercent: percent };
+}
+
+const CURRENCY_SYMBOLS: Record<string, string> = { USD: "$", EUR: "€", GBP: "£", CAD: "CA$", AUD: "A$" };
+
+function formatPrice(price: number, currency: string | null): string {
+  const sym = (currency && CURRENCY_SYMBOLS[currency]) || "$";
+  return `${sym}${Math.round(price)}`;
 }
 
 function tokenize(value: string): string[] {

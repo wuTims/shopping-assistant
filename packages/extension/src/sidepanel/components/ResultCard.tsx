@@ -14,8 +14,14 @@ export function ResultCard({ ranked, compact }: Props) {
       }).format(result.price)
     : null;
 
-  const savingsStr = ranked.savingsPercent !== null && ranked.savingsPercent > 0
-    ? `${ranked.savingsPercent.toFixed(0)}% less`
+  // Cheaper: savingsPercent < 0 (result costs less than original)
+  const savingsStr = ranked.savingsPercent !== null && ranked.savingsPercent < 0
+    ? `${Math.abs(ranked.savingsPercent).toFixed(0)}% less`
+    : null;
+
+  // More expensive: show markup percentage
+  const markupStr = ranked.savingsPercent !== null && ranked.savingsPercent > 10
+    ? `${ranked.savingsPercent.toFixed(0)}% more`
     : null;
 
   const handleClick = () => {
@@ -52,7 +58,10 @@ export function ResultCard({ ranked, compact }: Props) {
         <span className="text-xs text-text-main truncate flex-1">{result.title}</span>
         <span className={`text-sm font-bold shrink-0 ${priceStr ? "text-text-main" : "text-text-muted"}`}>{priceStr ?? "See price"}</span>
         {savingsStr && (
-          <span className="text-xs text-accent-green font-medium shrink-0">-{ranked.savingsPercent?.toFixed(0)}%</span>
+          <span className="text-xs text-accent-green font-medium shrink-0">-{Math.abs(ranked.savingsPercent!).toFixed(0)}%</span>
+        )}
+        {markupStr && (
+          <span className="text-xs text-text-muted font-medium shrink-0">+{ranked.savingsPercent?.toFixed(0)}%</span>
         )}
       </button>
     );
@@ -81,6 +90,9 @@ export function ResultCard({ ranked, compact }: Props) {
         <p className={`font-bold text-base ${priceStr ? "text-text-main" : "text-text-muted text-sm"}`}>{priceStr ?? "See price"}</p>
         {savingsStr && (
           <p className="text-accent-green text-xs font-medium">{savingsStr}</p>
+        )}
+        {markupStr && (
+          <p className="text-text-muted text-xs font-medium">{markupStr}</p>
         )}
       </div>
     </button>

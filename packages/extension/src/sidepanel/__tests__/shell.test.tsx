@@ -119,6 +119,7 @@ describe("sidepanel routed shell", () => {
 
     expect(screen.getByText("Top results")).toBeInTheDocument();
     expect(screen.getByText("Compact Leather Tote Bag")).toBeInTheDocument();
+    expect(screen.queryByText("You're Here")).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("link", { name: /chat now/i }));
     expect(screen.getByText(/shopping assistant/i)).toBeInTheDocument();
