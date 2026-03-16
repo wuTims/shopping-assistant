@@ -9,6 +9,7 @@ import { chatRoute } from "./routes/chat.js";
 import identifyRoute from "./routes/identify.js";
 import { aliexpressAuthRoute, initAliExpressAutoRefresh } from "./routes/aliexpress-auth.js";
 import { liveWebSocket } from "./ws/live.js";
+import { rateLimit } from "./middleware/rate-limit.js";
 
 // Fail fast if required env vars are missing
 const REQUIRED_ENV_VARS = ["GEMINI_API_KEY", "BRAVE_API_KEY"];
@@ -27,8 +28,12 @@ app.use("*", logger());
 
 // Apply CORS only to REST endpoints.
 // WebSocket upgrade requests are incompatible with CORS header mutation.
+const ALLOWED_ORIGINS: string | string[] = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(",")
+  : "*";
+
 const corsMiddleware = cors({
-  origin: "*", // TODO: Restrict to extension origin in production
+  origin: ALLOWED_ORIGINS,
   allowMethods: ["GET", "POST"],
   allowHeaders: ["Content-Type"],
 });
@@ -37,6 +42,12 @@ app.use("/search/*", corsMiddleware);
 app.use("/identify/*", corsMiddleware);
 app.use("/chat/*", corsMiddleware);
 app.use("/auth/*", corsMiddleware);
+
+// Rate limit: 60 requests per minute per IP for API endpoints
+const apiRateLimit = rateLimit({ windowMs: 60_000, max: 60 });
+app.use("/search/*", apiRateLimit);
+app.use("/identify/*", apiRateLimit);
+app.use("/chat/*", apiRateLimit);
 
 // Health check
 app.get("/health", (c) => c.json({ status: "ok" }));
@@ -57,5 +68,11 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
 
 injectWebSocket(server);
 
+console.log("[config] GEMINI_MODEL:", process.env.GEMINI_MODEL || "gemini-2.5-flash (default)");
+console.log("[config] GEMINI_LIVE_MODEL:", process.env.GEMINI_LIVE_MODEL || "not set");
+console.log("[config] CORS origins:", process.env.CORS_ALLOWED_ORIGINS || "* (open)");
+
 // Start AliExpress token auto-refresh (if tokens are configured)
-initAliExpressAutoRefresh();
+initAliExpressAutoRefresh().catch((err) => {
+  console.error("[aliexpress] Auto-refresh init failed:", err);
+});
