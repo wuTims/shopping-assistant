@@ -63,7 +63,7 @@ Found 5 results:
 
 **Parameters:** None.
 
-**Execution:** Pure computation. Reads from session-scoped results accumulator. Sorts by price, calculates savings vs. original.
+**Execution:** Pure computation. Reads from `[...initialResults, ...accumulatedResults]` — both the initial search results (parsed from config context at session start) and any results accumulated from voice `search_products` calls. Sorts by price, calculates savings vs. original product price.
 
 **Return to model:** Price comparison summary as text.
 
@@ -81,28 +81,53 @@ export async function executeVoiceSearch(
     marketplaceFilter?: string;
     originalPrice?: number;
     originalCurrency?: string;
+    sourceUrl?: string;        // Filter out the product the user is viewing
+    sourceMarketplace?: string;
     signal?: AbortSignal;
   }
 ): Promise<RankedResult[]>
 ```
 
+**Synthetic `ProductIdentification`:** The voice path has no image, so it skips `identifyProduct()`. However, `heuristicPreSort()` and `buildFallbackScores()` both require a `ProductIdentification` parameter. We construct a minimal synthetic one from the query string:
+
+```typescript
+const identification: ProductIdentification = {
+  category: query,
+  description: query,
+  brand: null,
+  attributes: { color: null, material: null, style: null, size: null },
+  searchQueries: [query],
+  estimatedPriceRange: null,
+};
+```
+
+This produces reasonable token overlap in the heuristic scoring functions.
+
 **Pipeline (~4-5s):**
-1. Generate marketplace queries via `generateMarketplaceQueries(query)` (or filter to single marketplace if `marketplaceFilter` provided)
-2. Parallel search: `searchProducts([query, ...marketplaceQueries])` + `searchAliExpressSplit([query], null)`
-3. `mergeAndDedup()` all results
-4. `heuristicPreSort()` + `buildFallbackScores()` + `applyRanking()`
-5. `quickHttpPriceEnrich()` on top 10 results (capped for latency)
-6. Return top 5 ranked results
+1. Build synthetic `ProductIdentification` from query
+2. Generate marketplace queries via `generateMarketplaceQueries(query)` (or filter to single marketplace if `marketplaceFilter` provided)
+3. Parallel search — unwrap provider outcomes:
+   - `searchProducts([query, ...marketplaceQueries])` → access `.results` from `ProviderSearchOutcome`
+   - `searchAliExpressSplit([query], null)` → access `.textOutcome.results` from `SplitProviderSearchOutcome` (image outcome ignored — no image available)
+4. `mergeAndDedup()` all `SearchResult[]` arrays → `annotateResultValidation()` → `isDisplayableCandidate()` filter
+5. Filter out source product URL (passed via options) to avoid returning the item the user is already viewing
+6. `heuristicPreSort(filtered, identification, originalPrice, sourceMarketplace)` → `diversityCap()` → cap to 15 candidates
+7. `quickHttpPriceEnrich(capped, 10)` — `maxPriceResults=10` limits priceless extraction; liveness checks still run on all candidates
+8. `buildFallbackScores(capped, identification, sourceMarketplace, originalPrice)` → `applyRanking()`
+9. Return top 5 ranked results
 
 **What's skipped vs. full `/search` pipeline:**
 - No `identifyProduct()` — we have text, not an image
 - No `generateImageSearchQueries()` / Brave image search / AliExpress image search
 - No `computeVisualSimilarityScores()` — no source image to compare against
-- Price enrichment capped to top 10 instead of `MAX_PRICE_FALLBACK_RESULTS`
+- `diversityCap` applied but with smaller candidate pool (15 vs `MAX_RESULTS_FOR_RANKING`)
+- `quickHttpPriceEnrich` with `maxPriceResults=10` for latency (note: liveness checks still run on all candidates, so total HTTP requests may exceed 10)
 
-**Abort support:** Accepts `AbortSignal` so in-flight searches can be cancelled on barge-in. Passed through to fetch calls where possible.
+**Abort support:** Accepts `AbortSignal` so in-flight searches can be cancelled on barge-in. Note: `searchProducts` and `searchAliExpressSplit` use their own internal timeout signals. The external `AbortSignal` cancels at the `executeVoiceSearch` boundary — in-flight HTTP requests from provider functions will complete but their results are discarded.
 
-**Reused modules:** `searchProducts` (brave.ts), `searchAliExpressSplit` (aliexpress.ts), `mergeAndDedup` / `heuristicPreSort` / `buildFallbackScores` / `applyRanking` (ranking.ts), `quickHttpPriceEnrich` (price-fallback.ts), `generateMarketplaceQueries` (marketplace-queries.ts).
+**Concurrency cap:** At most 1 voice search may be in-flight at a time. If the model calls `search_products` while a previous search is still running, the previous search is aborted before starting the new one.
+
+**Reused modules:** `searchProducts` (brave.ts), `searchAliExpressSplit` (aliexpress.ts), `mergeAndDedup` / `heuristicPreSort` / `diversityCap` / `buildFallbackScores` / `applyRanking` (ranking.ts), `annotateResultValidation` / `isDisplayableCandidate` (result-validation.ts), `quickHttpPriceEnrich` (price-fallback.ts), `generateMarketplaceQueries` (marketplace-queries.ts).
 
 ---
 
@@ -167,7 +192,7 @@ export type WsServerMessage =
 
 [Search completes]
   Server → Client:  { type: "tool_result", toolName: "search_products", toolCallId: "abc123", results: [...] }
-  Server → Gemini:  session.sendToolResponse({ functionResponses: [{ name: "search_products", response: { results: "..." } }] })
+  Server → Gemini:  session.sendToolResponse({ functionResponses: [{ id: toolCallId, name: "search_products", response: { results: "..." } }] })
   Server → Client:  { type: "audio", ... }  (model discusses results)
 
 [If user interrupts mid-search]
@@ -179,6 +204,15 @@ export type WsServerMessage =
 ---
 
 ## 5. Backend `live.ts` Changes
+
+### New imports
+
+```typescript
+import { Type } from "@google/genai";
+import type { FunctionDeclaration, FunctionCall } from "@google/genai";
+import type { RankedResult } from "@shopping-assistant/shared";
+import { executeVoiceSearch } from "../services/voice-search.js";
+```
 
 ### Tool declarations
 
@@ -214,16 +248,19 @@ New state within `liveWebSocket()` closure:
 
 ```typescript
 const pendingToolCalls = new Map<string, AbortController>();
-let accumulatedResults: RankedResult[] = []; // Results from tool calls during session
-let initialContext: Record<string, unknown> = {}; // From config message
+let accumulatedResults: RankedResult[] = [];     // Results from voice search tool calls
+let initialResults: RankedResult[] = [];          // Parsed from config message context
+let initialContext: Record<string, unknown> = {}; // Raw config context for product info
 ```
+
+**Parsing initial results:** When the `config` message arrives, extract `context.results` (the top 5 results sent from the frontend as `{ rank, title, price, currency, marketplace, confidence }`). Convert these into lightweight `RankedResult` objects and store in `initialResults`. The `compare_prices` tool reads from `[...initialResults, ...accumulatedResults]` to have the full picture.
 
 ### `toolCall` handling in `onmessage` callback
 
 When `message.toolCall?.functionCalls` is present:
-1. For each function call, send `tool_start` to client
+1. For each `FunctionCall` in the array, send `tool_start` to client (using `functionCall.id` as `toolCallId`)
 2. Execute the function (search or compare)
-3. If not cancelled: send `tool_result` to client, then `session.sendToolResponse()`
+3. If not cancelled: send `tool_result` to client, then `session.sendToolResponse({ functionResponses: [{ id: functionCall.id, name: functionCall.name, response: { ... } }] })` — the `id` field is **required** to correlate the response with the pending tool call
 4. Append new results to `accumulatedResults`
 
 ### `toolCallCancellation` handling
@@ -305,3 +342,5 @@ const [voiceSearchResults, setVoiceSearchResults] = useState<RankedResult[]>([])
 | Multiple tool calls in quick succession | Each tracked independently via `toolCallId` in the `pendingToolCalls` map |
 | Session timeout during search | Existing 15-min timeout still applies; search is short enough (~5s) to not be a factor |
 | `compare_prices` called with no results | Returns summary of initial results only; if none, model says it has nothing to compare |
+| Voice search returns user's own product | Source URL filtering applied (same logic as `/search` route) |
+| Rapid successive search requests | Concurrency cap: max 1 in-flight voice search; previous aborted before starting new |
