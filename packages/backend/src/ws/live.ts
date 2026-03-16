@@ -2,7 +2,7 @@ import type { WSContext, WSEvents } from "hono/ws";
 import { Modality } from "@google/genai";
 import type { Session, LiveServerMessage } from "@google/genai";
 import type { WsClientMessage, WsServerMessage } from "@shopping-assistant/shared";
-import { VOICE_SESSION_MAX_MS, VOICE_SESSION_TIMEOUT_BUFFER_MS } from "@shopping-assistant/shared";
+import { VOICE_SESSION_MAX_MS } from "@shopping-assistant/shared";
 import { ai, liveModel } from "../services/ai-client.js";
 
 function buildSystemInstruction(context: Record<string, unknown>): string {
@@ -140,8 +140,8 @@ export function liveWebSocket(_c: unknown): WSEvents {
                   console.log("[live] Upstream setup complete");
                 }
               },
-              onerror(event: Event) {
-                console.error("[live] Upstream error:", event);
+              onerror(event: { message?: string }) {
+                console.error("[live] Upstream error:", event.message ?? event);
                 sendToClient(ws, {
                   type: "error",
                   message: "Voice service error",
