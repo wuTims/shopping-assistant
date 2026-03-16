@@ -11,16 +11,15 @@ interface Props {
 export function PriceBar({ productPrice, currency, response, collapsed, onToggle }: Props) {
   const currencySymbol = currency === "USD" || !currency ? "$" : currency === "EUR" ? "€" : currency === "GBP" ? "£" : `${currency} `;
 
-  // Use only the top 3 priced results for the scale — prevents outliers
-  // (e.g. a $600 item) from skewing the LOW/FAIR/HIGH indicator.
-  const top3Prices = response.results
+  // Use the top 5 priced results for the scale and comparison message.
+  const topPrices = response.results
     .filter((r) => r.result.price !== null)
-    .slice(0, 3)
+    .slice(0, 5)
     .map((r) => r.result.price!);
 
-  if (top3Prices.length === 0 || productPrice === null) return null;
+  if (topPrices.length === 0 || productPrice === null) return null;
 
-  const scalePrices = [...top3Prices, productPrice];
+  const scalePrices = [...topPrices, productPrice];
   const low = Math.min(...scalePrices);
   const high = Math.max(...scalePrices);
   const range = high - low;
@@ -28,16 +27,16 @@ export function PriceBar({ productPrice, currency, response, collapsed, onToggle
 
   const position = ((productPrice - low) / range) * 100;
 
-  // Best price among top 3 alternatives (not buried outliers)
-  const top3WithPrices = response.results
+  // Best price among top 5 alternatives
+  const topWithPrices = response.results
     .filter((r) => r.result.price !== null)
-    .slice(0, 3);
-  const bestTop3Price = Math.min(...top3Prices);
-  const bestResult = top3WithPrices.find((r) => r.result.price === bestTop3Price);
+    .slice(0, 5);
+  const bestTopPrice = Math.min(...topPrices);
+  const bestResult = topWithPrices.find((r) => r.result.price === bestTopPrice);
 
-  // Average from top 3 for the comparison message
-  const top3Avg = top3Prices.reduce((a, b) => a + b, 0) / top3Prices.length;
-  const aboveAvg = Math.round(((productPrice - top3Avg) / top3Avg) * 100);
+  // Average from top 5 for the comparison message
+  const topAvg = topPrices.reduce((a, b) => a + b, 0) / topPrices.length;
+  const aboveAvg = Math.round(((productPrice - topAvg) / topAvg) * 100);
 
   const label = position > 66 ? "HIGH" : position > 33 ? "FAIR" : "LOW";
   const labelColor = position > 66 ? "text-accent-red" : position > 33 ? "text-accent-yellow" : "text-accent-green";

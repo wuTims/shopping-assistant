@@ -88,9 +88,11 @@ export async function quickHttpPriceEnrich(
         prices.set(r.id, { price: result.price, currency: result.currency });
       }
     }),
-    // GET requests — liveness + stale detection (cluster-priced).
+    // GET requests — liveness + stale detection + price re-validation (cluster-priced).
     // Uses GET (not HEAD) because Amazon/Lowes return 200 for dead products
     // with "Currently unavailable" text that only stale body detection catches.
+    // Also re-extracts price from page HTML because Brave product clusters sometimes
+    // return shipping cost or bid price instead of the actual product price.
     ...clusterPriced.map(async (r) => {
       const result = await fetchAndExtractPrice(r.productUrl);
       if (result.httpStatus === 404 || result.httpStatus === 410) {
@@ -105,6 +107,18 @@ export async function quickHttpPriceEnrich(
           `[quick-enrich] Stale cluster-priced product: ${r.productUrl.slice(0, 80)}`,
         );
         deadLinks.add(r.id);
+        return;
+      }
+      // Re-validate cluster price against page-extracted price.
+      // Brave clusters sometimes return shipping cost or bid price.
+      if (result.price != null && result.currency != null && r.price != null) {
+        const ratio = result.price / r.price;
+        if (ratio > 1.5 || ratio < 0.5) {
+          console.log(
+            `[quick-enrich] Cluster price corrected: ${r.currency}${r.price} → ${result.currency}${result.price} from ${new URL(r.productUrl).hostname}`,
+          );
+          prices.set(r.id, { price: result.price, currency: result.currency });
+        }
       }
     }),
     // GET requests — liveness + stale detection for remaining unchecked results.

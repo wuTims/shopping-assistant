@@ -23,6 +23,14 @@ const STALE_BODY_PATTERNS = [
   /this\s+item\s+is\s+no\s+longer\s+sold/i,
   // Etsy: "Sorry, this item and shop are currently unavailable"
   /sorry,?\s*this\s+item\s+and\s+shop\s+are?\s+(currently\s+)?unavailable/i,
+  // Etsy: "Sorry, this item is sold out"
+  /sorry,?\s*this\s+item\s+is\s+(currently\s+)?sold\s+out/i,
+  // DHgate: "This item doesn't exist"
+  /this\s+(product|item)\s+(doesn[''\u2019]?t|does\s+not)\s+exist/i,
+  // Walmart / generic: "Not Available" or "Item not available"
+  /\b(this\s+)?(item|product)\s+(is\s+)?(currently\s+)?not\s+available\b/i,
+  // Generic sold out patterns
+  /\bitem\s+is\s+(currently\s+)?sold\s+out\b/i,
   // Generic 404 / removed patterns
   /page\s+(not\s+found|cannot\s+be\s+found|you\s+requested\s+(was|is)\s+not\s+found)/i,
 ];
