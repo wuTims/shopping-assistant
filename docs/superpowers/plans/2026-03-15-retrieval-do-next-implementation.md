@@ -52,7 +52,7 @@ Add assertions that final results include a `matchedQueries` array shaped like:
 Run:
 
 ```powershell
-& 'C:\dev\repos\shopping-assistant\packages\backend\node_modules\.bin\vitest.cmd' run packages/backend/src/services/__tests__/ranking.test.ts packages/backend/src/routes/__tests__/search.test.ts
+pnpm --filter backend exec vitest run packages/backend/src/services/__tests__/ranking.test.ts packages/backend/src/routes/__tests__/search.test.ts
 ```
 
 Expected: FAIL because `matchedQueries` is not defined on `SearchResult` yet.
@@ -113,7 +113,7 @@ Add a test that mocks AliExpress text results and image results separately and e
 Run:
 
 ```powershell
-& 'C:\dev\repos\shopping-assistant\packages\backend\node_modules\.bin\vitest.cmd' run packages/backend/src/routes/__tests__/search.test.ts
+pnpm --filter backend exec vitest run packages/backend/src/routes/__tests__/search.test.ts
 ```
 
 Expected: FAIL because `searchAliExpress()` currently collapses everything into one outcome.
@@ -150,7 +150,7 @@ In `packages/backend/src/routes/search.ts`:
 Run:
 
 ```powershell
-& 'C:\dev\repos\shopping-assistant\packages\backend\node_modules\.bin\vitest.cmd' run packages/backend/src/routes/__tests__/search.test.ts
+pnpm --filter backend exec vitest run packages/backend/src/routes/__tests__/search.test.ts
 ```
 
 Expected: PASS for AliExpress lane attribution assertions.
@@ -185,7 +185,7 @@ Assert:
 Run:
 
 ```powershell
-& 'C:\dev\repos\shopping-assistant\packages\backend\node_modules\.bin\vitest.cmd' run packages/backend/src/routes/__tests__/search.test.ts
+pnpm --filter backend exec vitest run packages/backend/src/routes/__tests__/search.test.ts
 ```
 
 Expected: FAIL because image-generated queries are only sent to `searchImages()` today.
@@ -232,7 +232,7 @@ Add tests asserting that:
 Run:
 
 ```powershell
-& 'C:\dev\repos\shopping-assistant\packages\backend\node_modules\.bin\vitest.cmd' run packages/backend/src/services/__tests__/ranking.test.ts packages/backend/src/routes/__tests__/search.test.ts
+pnpm --filter backend exec vitest run packages/backend/src/services/__tests__/ranking.test.ts packages/backend/src/routes/__tests__/search.test.ts
 ```
 
 Expected: FAIL because route tagging and dedupe do not yet carry query arrays.
@@ -300,7 +300,7 @@ Add tests showing:
 Run:
 
 ```powershell
-& 'C:\dev\repos\shopping-assistant\packages\backend\node_modules\.bin\vitest.cmd' run packages/backend/src/services/__tests__/ranking.test.ts
+pnpm --filter backend exec vitest run packages/backend/src/services/__tests__/ranking.test.ts
 ```
 
 Expected: FAIL because retrieval lane does not affect scores today.
@@ -358,7 +358,7 @@ Each test should assert:
 Run:
 
 ```powershell
-& 'C:\dev\repos\shopping-assistant\packages\backend\node_modules\.bin\vitest.cmd' run packages/backend/src/routes/__tests__/search.test.ts
+pnpm --filter backend exec vitest run packages/backend/src/routes/__tests__/search.test.ts
 ```
 
 Expected: FAIL where degraded-path behavior or provenance accounting is incomplete.
@@ -393,7 +393,7 @@ git commit -m "test: cover degraded retrieval lane behavior"
 Run:
 
 ```powershell
-& 'C:\dev\repos\shopping-assistant\packages\backend\node_modules\.bin\vitest.cmd' run packages/backend/src/services/__tests__/ranking.test.ts packages/backend/src/routes/__tests__/search.test.ts packages/backend/src/services/__tests__/gemini.test.ts
+pnpm --filter backend exec vitest run packages/backend/src/services/__tests__/ranking.test.ts packages/backend/src/routes/__tests__/search.test.ts packages/backend/src/services/__tests__/gemini.test.ts
 ```
 
 Expected: PASS.
@@ -403,7 +403,7 @@ Expected: PASS.
 Run:
 
 ```powershell
-& 'C:\dev\repos\shopping-assistant\packages\backend\node_modules\.bin\tsc.cmd' --noEmit -p 'C:\dev\repos\shopping-assistant\packages\backend\tsconfig.json'
+pnpm --filter backend exec tsc --noEmit
 ```
 
 Expected: PASS.

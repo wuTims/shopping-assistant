@@ -2,7 +2,7 @@ import { createHmac, randomUUID } from "node:crypto";
 import type { SearchResult } from "@shopping-assistant/shared";
 import type { FetchedImage } from "./gemini.js";
 import type { ProviderSearchOutcome, SplitProviderSearchOutcome } from "./provider-outcome.js";
-import { resolveProviderStatus } from "./provider-outcome.js";
+import { emptyProviderOutcome, resolveProviderStatus } from "./provider-outcome.js";
 import { isLikelyTimeoutError } from "../utils/errors.js";
 
 const BASE_URL = "https://api-sg.aliexpress.com/sync";
@@ -274,17 +274,6 @@ function combineProviderOutcomes(a: ProviderSearchOutcome, b: ProviderSearchOutc
   };
 }
 
-function emptyProviderOutcome(): ProviderSearchOutcome {
-  return {
-    results: [],
-    status: "ok",
-    totalQueries: 0,
-    successfulQueries: 0,
-    failedQueries: 0,
-    timedOutQueries: 0,
-  };
-}
-
 // ── Response Normalization ───────────────────────────────────────────────────
 
 // No module-level counter — use randomUUID per result for unique IDs
@@ -293,6 +282,25 @@ function prependHttps(url: string): string {
   if (url.startsWith("//")) return `https:${url}`;
   if (!url.startsWith("http")) return `https://${url}`;
   return url;
+}
+
+/**
+ * Build a clean, stable AliExpress product URL from a product ID.
+ * API-returned URLs contain time-limited promotional parameters
+ * (pdp_npi, gatewayAdapt) that cause pages to break after the
+ * promotion expires.
+ */
+function buildCleanProductUrl(
+  productId: unknown,
+  fallbackUrl: unknown,
+): string {
+  if (productId && typeof productId === "string") {
+    return `https://www.aliexpress.com/item/${productId}.html`;
+  }
+  if (typeof productId === "number") {
+    return `https://www.aliexpress.com/item/${productId}.html`;
+  }
+  return typeof fallbackUrl === "string" ? prependHttps(fallbackUrl) : "";
 }
 
 export function normalizeTextSearchResults(data: unknown): SearchResult[] {
@@ -319,7 +327,7 @@ export function normalizeTextSearchResults(data: unknown): SearchResult[] {
         : "USD",
       priceSource: price !== null && !isNaN(price) ? "provider_structured" : "none",
       imageUrl: item.itemMainPic ? prependHttps(String(item.itemMainPic)) : null,
-      productUrl: item.itemUrl ? prependHttps(String(item.itemUrl)) : "",
+      productUrl: buildCleanProductUrl(item.itemId, item.itemUrl),
       marketplace: "AliExpress",
       snippet: null,
       structuredData: {
@@ -359,9 +367,7 @@ export function normalizeImageSearchResults(data: unknown): SearchResult[] {
       imageUrl: typeof item.product_main_image_url === "string"
         ? item.product_main_image_url
         : null,
-      productUrl: typeof item.product_detail_url === "string"
-        ? item.product_detail_url
-        : "",
+      productUrl: buildCleanProductUrl(item.product_id, item.product_detail_url),
       marketplace: "AliExpress",
       snippet: null,
       structuredData: {

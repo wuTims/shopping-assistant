@@ -20,6 +20,7 @@ import { fillMissingPrices } from "../services/price-fallback.js";
 import { generateMarketplaceQueries } from "../utils/marketplace-queries.js";
 import { extractMarketplace } from "../utils/marketplace.js";
 import type { ProviderSearchOutcome, ProviderStatus } from "../services/provider-outcome.js";
+import { emptyProviderOutcome } from "../services/provider-outcome.js";
 import {
   mergeAndDedup,
   applyRanking,
@@ -511,17 +512,6 @@ function hasNewQueries(aiQueries: string[], titleQueries: string[]): boolean {
   if (titleQueries.length === 0) return true;
   const titleSet = new Set(titleQueries.map((q) => q.toLowerCase().trim()));
   return aiQueries.some((q) => !titleSet.has(q.toLowerCase().trim()));
-}
-
-function emptyProviderOutcome(): ProviderSearchOutcome {
-  return {
-    results: [],
-    status: "ok",
-    totalQueries: 0,
-    successfulQueries: 0,
-    failedQueries: 0,
-    timedOutQueries: 0,
-  };
 }
 
 function combineBraveOutcomes(a: ProviderSearchOutcome, b: ProviderSearchOutcome): ProviderSearchOutcome {

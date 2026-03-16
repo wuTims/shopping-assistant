@@ -30,10 +30,11 @@ const PRODUCT_DETAIL_PATH_PATTERNS: Array<{ host: RegExp; path: RegExp }> = [
   { host: /(^|\.)amazon\./i, path: /^\/(?:dp|gp\/product)(?:\/|$)/i },
   { host: /(^|\.)ebay\./i, path: /^\/itm(?:\/|$)/i },
   { host: /(^|\.)target\.com$/i, path: /^\/p\/(?:-|$)/i },
-  { host: /(^|\.)bestbuy\.com$/i, path: /^\/site\/(?:-|$)/i },
+  { host: /(^|\.)bestbuy\.com$/i, path: /^\/site\/(?!searchpage)/i },
   { host: /(^|\.)homedepot\.com$/i, path: /^\/p\/(?:-|$)/i },
   { host: /(^|\.)lowes\.com$/i, path: /^\/pd\/(?:-|$)/i },
   { host: /(^|\.)etsy\.com$/i, path: /^\/listing\/(?:-|$)/i },
+  { host: /(^|\.)aliexpress\.com$/i, path: /^\/item\/(?:-|$|[\w-]+\.html)/i },
 ];
 
 interface BraveWebResult {

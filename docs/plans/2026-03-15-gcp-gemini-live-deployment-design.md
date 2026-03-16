@@ -26,7 +26,7 @@ That structure keeps Gemini and Brave credentials off the client, avoids introdu
 
 Deploy one backend service that serves normal REST routes and the `/live` WebSocket endpoint.
 
-**Why chosen:** Best fit for the current repo. Lowest ops overhead, minimal code restructuring, and already aligned with the architecture in [architecture-spec.md](C:/dev/repos/shopping-assistant/docs/architecture-spec.md).
+**Why chosen:** Best fit for the current repo. Lowest ops overhead, minimal code restructuring, and already aligned with the architecture in [architecture-spec.md](docs/architecture-spec.md).
 
 ### 2. Split Cloud Run services
 
@@ -56,10 +56,10 @@ Chrome Extension
 
 `packages/backend` is the only server deployable in the repo today. It already has:
 
-- REST routes in [index.ts](C:/dev/repos/shopping-assistant/packages/backend/src/index.ts)
+- REST routes in [index.ts](packages/backend/src/index.ts)
 - WebSocket entry point at `/live`
-- Gemini client wiring in [ai-client.ts](C:/dev/repos/shopping-assistant/packages/backend/src/services/ai-client.ts)
-- a production container build in [Dockerfile](C:/dev/repos/shopping-assistant/packages/backend/Dockerfile)
+- Gemini client wiring in [ai-client.ts](packages/backend/src/services/ai-client.ts)
+- a production container build in [Dockerfile](packages/backend/Dockerfile)
 
 That means the natural deployment unit is a single container image built from the existing backend package and pushed to Artifact Registry, then deployed to Cloud Run.
 
@@ -192,12 +192,12 @@ The deployment path for the current repo should be:
 
 This design mostly affects:
 
-- [index.ts](C:/dev/repos/shopping-assistant/packages/backend/src/index.ts)
-- [live.ts](C:/dev/repos/shopping-assistant/packages/backend/src/ws/live.ts)
-- [ai-client.ts](C:/dev/repos/shopping-assistant/packages/backend/src/services/ai-client.ts)
+- [index.ts](packages/backend/src/index.ts)
+- [live.ts](packages/backend/src/ws/live.ts)
+- [ai-client.ts](packages/backend/src/services/ai-client.ts)
 - extension config files that store backend URLs
 
-The main missing piece today is the actual Gemini Live upstream session handling in [live.ts](C:/dev/repos/shopping-assistant/packages/backend/src/ws/live.ts), which is still a stub.
+The main missing piece today is the actual Gemini Live upstream session handling in [live.ts](packages/backend/src/ws/live.ts), which is still a stub.
 
 ## Recommended Next Steps
 

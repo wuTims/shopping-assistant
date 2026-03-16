@@ -42,9 +42,13 @@ chrome.action.onClicked.addListener(async (tab) => {
   if (!tab.id) return;
   activeTabId = tab.id;
 
-  await ensureContentScript(tab.id);
-  await chrome.sidePanel.open({ tabId: tab.id });
-  notifySidePanel(tab.id, { type: "empty" });
+  try {
+    await ensureContentScript(tab.id);
+    await chrome.sidePanel.open({ tabId: tab.id });
+    notifySidePanel(tab.id, { type: "empty" });
+  } catch (err) {
+    console.error("[Shopping Assistant] Failed to open side panel:", err);
+  }
 });
 
 // Listen for messages from side panel and content script
