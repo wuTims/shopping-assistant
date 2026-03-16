@@ -1,9 +1,7 @@
 import { Hono } from "hono";
 import { createHmac } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
 import { setAccessToken, hasValidToken, getAccessToken } from "../services/aliexpress.js";
+import { getTokenStore } from "../services/secret-store.js";
 
 const APP_KEY = process.env.ALIEXPRESS_APP_KEY ?? "";
 const APP_SECRET = process.env.ALIEXPRESS_API_KEY ?? "";
@@ -100,17 +98,17 @@ aliexpressAuthRoute.post("/refresh", async (c) => {
 
 /**
  * POST /auth/aliexpress/persist
- * Write the current in-memory access token to .env so it survives restarts.
+ * Persist the current in-memory access token (Secret Manager in prod, .env locally).
  */
-aliexpressAuthRoute.post("/persist", (c) => {
+aliexpressAuthRoute.post("/persist", async (c) => {
   const token = getAccessToken();
   if (!token) {
     return c.json({ error: "no_token", message: "No access token in memory to persist" }, 400);
   }
 
   try {
-    persistTokenToEnv(token);
-    return c.json({ success: true, message: "Token written to .env" });
+    await persistToken(token);
+    return c.json({ success: true, message: "Token persisted" });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return c.json({ error: "persist_failed", message }, 500);
@@ -187,12 +185,8 @@ async function exchangeCodeForToken(code: string) {
     refreshTokenExpiry = refreshExpiryMs;
   }
 
-  // Persist all tokens to .env so they survive restarts
-  try {
-    persistAllTokensToEnv(accessTokenValue, tokenExpiryMs, refreshTokenValue, refreshExpiryMs);
-  } catch (e) {
-    console.warn("[aliexpress-auth] Failed to persist tokens to .env:", e);
-  }
+  // Persist all tokens so they survive restarts
+  await persistAllTokens(accessTokenValue, tokenExpiryMs, refreshTokenValue, refreshExpiryMs);
 
   // Schedule the next auto-refresh
   scheduleTokenRefresh(tokenExpiryMs);
@@ -258,12 +252,8 @@ async function refreshAccessToken() {
     refreshTokenExpiry = refreshExpiryMs;
   }
 
-  // Persist all tokens to .env
-  try {
-    persistAllTokensToEnv(accessTokenValue, tokenExpiryMs, newRefreshToken, refreshExpiryMs);
-  } catch (e) {
-    console.warn("[aliexpress-auth] Failed to persist refreshed tokens to .env:", e);
-  }
+  // Persist all tokens so they survive restarts
+  await persistAllTokens(accessTokenValue, tokenExpiryMs, newRefreshToken, refreshExpiryMs);
 
   // Schedule the next auto-refresh
   scheduleTokenRefresh(tokenExpiryMs);
@@ -320,8 +310,55 @@ function scheduleTokenRefresh(accessTokenExpiresAt: number): void {
 
 /**
  * Call on startup to restore token state and schedule auto-refresh.
+ * On Cloud Run, reads latest token values from Secret Manager (a previous
+ * instance may have refreshed them since the deploy-time injection).
  */
-export function initAliExpressAutoRefresh(): void {
+export async function initAliExpressAutoRefresh(): Promise<void> {
+  if (process.env.GCP_PROJECT_ID) {
+    try {
+      const { SecretManagerServiceClient } = await import("@google-cloud/secret-manager");
+      const client = new SecretManagerServiceClient();
+      const projectId = process.env.GCP_PROJECT_ID;
+
+      const secretNames = [
+        "ALIEXPRESS_ACCESS_TOKEN",
+        "ALIEXPRESS_TOKEN_EXPIRY",
+        "ALIEXPRESS_REFRESH_TOKEN",
+        "ALIEXPRESS_REFRESH_TOKEN_EXPIRY",
+      ];
+
+      for (const name of secretNames) {
+        try {
+          const [version] = await client.accessSecretVersion({
+            name: `projects/${projectId}/secrets/${name}/versions/latest`,
+          });
+          const value = version.payload?.data?.toString();
+          if (value) {
+            process.env[name] = value;
+          }
+        } catch {
+          // Secret may not exist yet. Skip.
+        }
+      }
+      console.log("[aliexpress] Loaded latest token values from Secret Manager");
+    } catch (err) {
+      console.warn("[aliexpress] Failed to read tokens from Secret Manager, using env vars:", err);
+    }
+
+    // Update module-level vars from potentially-refreshed env vars
+    refreshToken = process.env.ALIEXPRESS_REFRESH_TOKEN ?? "";
+    refreshTokenExpiry = Number(process.env.ALIEXPRESS_REFRESH_TOKEN_EXPIRY) || 0;
+
+    // Update the aliexpress service module's in-memory token
+    if (process.env.ALIEXPRESS_ACCESS_TOKEN) {
+      const expiry = Number(process.env.ALIEXPRESS_TOKEN_EXPIRY) || 0;
+      const remainingSec = Math.max(0, Math.floor((expiry - Date.now()) / 1000));
+      if (remainingSec > 0) {
+        setAccessToken(process.env.ALIEXPRESS_ACCESS_TOKEN, remainingSec);
+      }
+    }
+  }
+
   const tokenExpiry = Number(process.env.ALIEXPRESS_TOKEN_EXPIRY) || 0;
   const hasToken = !!process.env.ALIEXPRESS_ACCESS_TOKEN;
 
@@ -344,48 +381,35 @@ export function initAliExpressAutoRefresh(): void {
   }
 }
 
-// ── .env Persistence ────────────────────────────────────────────────────────
+// ── Token Persistence ────────────────────────────────────────────────────────
 
-function getEnvPath(): string {
-  const currentDir = dirname(fileURLToPath(import.meta.url));
-  // routes/ -> src/ -> backend/
-  return resolve(currentDir, "..", "..", ".env");
-}
-
-function upsertEnvVar(content: string, key: string, value: string): string {
-  const pattern = new RegExp(`^${key}=.*$`, "m");
-  if (pattern.test(content)) {
-    return content.replace(pattern, `${key}=${value}`);
+async function persistToken(token: string): Promise<void> {
+  try {
+    await getTokenStore().persistTokens({ ALIEXPRESS_ACCESS_TOKEN: token });
+  } catch (err) {
+    console.warn("[aliexpress] Failed to persist access token:", err);
   }
-  return content.trimEnd() + `\n${key}=${value}\n`;
 }
 
-function persistTokenToEnv(token: string): void {
-  const envPath = getEnvPath();
-  let content = readFileSync(envPath, "utf-8");
-
-  content = upsertEnvVar(content, "ALIEXPRESS_ACCESS_TOKEN", token);
-
-  writeFileSync(envPath, content);
-  console.log(`[aliexpress-auth] Token persisted to ${envPath}`);
-}
-
-function persistAllTokensToEnv(
+async function persistAllTokens(
   accessTokenValue: string,
   tokenExpiryMs: number,
   refreshTokenValue: string | undefined,
   refreshExpiryMs: number,
-): void {
-  const envPath = getEnvPath();
-  let content = readFileSync(envPath, "utf-8");
+): Promise<void> {
+  const tokens: Record<string, string> = {
+    ALIEXPRESS_ACCESS_TOKEN: accessTokenValue,
+    ALIEXPRESS_TOKEN_EXPIRY: String(tokenExpiryMs),
+  };
 
-  content = upsertEnvVar(content, "ALIEXPRESS_ACCESS_TOKEN", accessTokenValue);
-  content = upsertEnvVar(content, "ALIEXPRESS_TOKEN_EXPIRY", String(tokenExpiryMs));
   if (refreshTokenValue) {
-    content = upsertEnvVar(content, "ALIEXPRESS_REFRESH_TOKEN", refreshTokenValue);
-    content = upsertEnvVar(content, "ALIEXPRESS_REFRESH_TOKEN_EXPIRY", String(refreshExpiryMs));
+    tokens.ALIEXPRESS_REFRESH_TOKEN = refreshTokenValue;
+    tokens.ALIEXPRESS_REFRESH_TOKEN_EXPIRY = String(refreshExpiryMs);
   }
 
-  writeFileSync(envPath, content);
-  console.log(`[aliexpress-auth] All tokens persisted to ${envPath}`);
+  try {
+    await getTokenStore().persistTokens(tokens);
+  } catch (err) {
+    console.warn("[aliexpress] Failed to persist tokens:", err);
+  }
 }
