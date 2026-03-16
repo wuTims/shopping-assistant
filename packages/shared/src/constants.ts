@@ -31,3 +31,10 @@ export const OVERLAY_ICON_HOVER_SIZE_PX = 32;
 export const MIN_IMAGE_SIZE_PX = 60;
 export const OVERLAY_TITLE_HINT_MAX_LENGTH = 200;
 export const OVERLAY_HIDE_DELAY_MS = 200;
+
+// Voice / Gemini Live API
+export const VOICE_INPUT_SAMPLE_RATE = 16_000;
+export const VOICE_OUTPUT_SAMPLE_RATE = 24_000;
+export const VOICE_WORKLET_BUFFER_SIZE = 640; // 40ms at 16kHz — Google recommends 20-40ms chunks
+export const VOICE_SESSION_MAX_MS = 15 * 60 * 1000; // Gemini Live API audio-only session limit
+export const VOICE_SESSION_TIMEOUT_BUFFER_MS = 30 * 1000; // Warn client 30s before expiry

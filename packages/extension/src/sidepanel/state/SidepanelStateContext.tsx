@@ -18,6 +18,8 @@ import type {
   SearchResponse,
 } from "@shopping-assistant/shared";
 import { loadSidepanelSettings, saveSidepanelSettings } from "./settings-storage";
+import { useVoice } from "../hooks/useVoice";
+import type { VoiceStatus } from "../hooks/useVoice";
 
 export type ViewState =
   | { view: "empty" }
@@ -82,6 +84,14 @@ interface SidepanelStateValue {
   resetToEmpty: () => void;
   selectDetectedProduct: (product: IdentifiedProduct, tabId: number, screenshotDataUrl: string, pageUrl: string) => void;
   sendChatMessage: (text: string) => void;
+  voiceStatus: VoiceStatus;
+  isVoiceRecording: boolean;
+  voiceInputTranscript: string;
+  voiceOutputTranscript: string;
+  voiceError: string | null;
+  startVoice: () => Promise<void>;
+  pauseVoice: () => void;
+  endVoiceSession: () => void;
   setPriceBarCollapsed: (collapsed: boolean) => void;
   addSavedLink: (ranked: RankedResult) => void;
   removeSavedLink: (id: string) => void;
@@ -111,6 +121,9 @@ const themes: ThemeOption[] = [
 
 const defaultTheme = themes[0];
 const SidepanelStateContext = createContext<SidepanelStateValue | null>(null);
+
+// Keep in sync with packages/extension/src/background/index.ts:12
+const BACKEND_WS_URL = "http://localhost:8080".replace(/^http/, "ws");
 
 function toPriceLabel(price: number | null, currency: string | null) {
   if (price === null) return "See price";
@@ -437,6 +450,28 @@ export function SidepanelStateProvider({
       : null;
   const currentResponse = viewState.view === "results" ? viewState.response : null;
 
+  const voiceContext = useMemo(() => ({
+    product: currentProduct ? {
+      name: currentProduct.name,
+      price: currentProduct.price,
+      currency: currentProduct.currency,
+      marketplace: currentProduct.marketplace,
+    } : null,
+    results: displayResults.slice(0, 5).map((r) => ({
+      title: r.result.title,
+      price: r.result.price,
+      marketplace: r.result.marketplace,
+    })),
+  }), [currentProduct, displayResults]);
+
+  const voice = useVoice({ backendUrl: BACKEND_WS_URL, context: voiceContext });
+
+  useEffect(() => {
+    if (viewState.view !== "results") {
+      voice.endSession();
+    }
+  }, [viewState.view, voice.endSession]);
+
   const value = useMemo<SidepanelStateValue>(() => ({
     viewState,
     displayResults,
@@ -466,6 +501,14 @@ export function SidepanelStateProvider({
     addSavedLink,
     removeSavedLink,
     setSelectedThemeId,
+    voiceStatus: voice.status,
+    isVoiceRecording: voice.isRecording,
+    voiceInputTranscript: voice.inputTranscript,
+    voiceOutputTranscript: voice.outputTranscript,
+    voiceError: voice.error,
+    startVoice: voice.start,
+    pauseVoice: voice.pauseMic,
+    endVoiceSession: voice.endSession,
   }), [
     addSavedLink,
     chatLoading,
@@ -482,6 +525,14 @@ export function SidepanelStateProvider({
     selectedTheme,
     sendChatMessage,
     viewState,
+    voice.status,
+    voice.isRecording,
+    voice.inputTranscript,
+    voice.outputTranscript,
+    voice.error,
+    voice.start,
+    voice.pauseMic,
+    voice.endSession,
   ]);
 
   return (

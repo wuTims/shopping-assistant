@@ -271,9 +271,15 @@ export interface ChatResponse {
 export type WsClientMessage =
   | { type: "config"; context: Record<string, unknown> }
   | { type: "audio"; encoding: "pcm_s16le"; sampleRateHz: 16000; data: string }
-  | { type: "text"; content: string };
+  | { type: "text"; content: string }
+  | { type: "audioStreamEnd" };
 
 export type WsServerMessage =
   | { type: "audio"; encoding: "pcm_s16le"; sampleRateHz: 24000; data: string }
-  | { type: "transcript"; content: string }
-  | { type: "turn_complete" };
+  | { type: "input_transcript"; content: string }
+  | { type: "output_transcript"; content: string }
+  | { type: "interrupted" }
+  | { type: "turn_complete" }
+  | { type: "go_away"; timeLeftMs: number }
+  | { type: "session_resumption"; token: string }
+  | { type: "error"; message: string };
