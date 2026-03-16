@@ -32,7 +32,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
-function base64ToFloat32(base64: string): Float32Array {
+function base64ToFloat32(base64: string): Float32Array<ArrayBuffer> {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
@@ -63,6 +63,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
   const nextPlayTimeRef = useRef(0);
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const cleaningUpRef = useRef(false);
+  const turnCompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stopCapture = useCallback(() => {
     workletNodeRef.current?.disconnect();
@@ -86,8 +87,13 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
 
     stopCapture();
 
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.close();
+    if (turnCompleteTimerRef.current) {
+      clearTimeout(turnCompleteTimerRef.current);
+      turnCompleteTimerRef.current = null;
+    }
+
+    if (wsRef.current) {
+      try { wsRef.current.close(); } catch { /* already closed */ }
     }
     wsRef.current = null;
 
@@ -117,7 +123,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
     const float32 = base64ToFloat32(base64Data);
 
     const audioBuffer = ctx.createBuffer(1, float32.length, VOICE_OUTPUT_SAMPLE_RATE);
-    audioBuffer.copyToChannel(new Float32Array(float32), 0);
+    audioBuffer.copyToChannel(float32, 0);
 
     const source = ctx.createBufferSource();
     source.buffer = audioBuffer;
@@ -184,7 +190,9 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
             clearPlaybackQueue();
             break;
           case "turn_complete":
-            setTimeout(() => {
+            if (turnCompleteTimerRef.current) clearTimeout(turnCompleteTimerRef.current);
+            turnCompleteTimerRef.current = setTimeout(() => {
+              turnCompleteTimerRef.current = null;
               setInputTranscript("");
               setOutputTranscript("");
             }, 200);
@@ -202,22 +210,27 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
         }
       };
 
-      ws.onerror = () => {
+      const handleWsError = () => {
         setError("Connection error");
         setStatus("error");
         cleanup();
       };
 
+      ws.onerror = handleWsError;
+
       ws.onclose = () => {
-        if (status !== "error") setStatus("idle");
+        setStatus((prev) => (prev === "error" ? prev : "idle"));
       };
 
       await new Promise<void>((resolve, reject) => {
         ws.onopen = () => resolve();
-        ws.onerror = (e) => {
+        ws.onerror = () => {
           reject(new Error("WebSocket connection failed"));
         };
       });
+
+      // Restore persistent error handler after connection promise resolves
+      ws.onerror = handleWsError;
 
       sendWs({ type: "config", context: contextRef.current });
 
@@ -255,7 +268,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
       setStatus("error");
       cleanup();
     }
-  }, [backendUrl, cleanup, clearPlaybackQueue, playAudioChunk, sendWs, status]);
+  }, [backendUrl, cleanup, clearPlaybackQueue, playAudioChunk, sendWs]);
 
   const pauseMic = useCallback(() => {
     sendWs({ type: "audioStreamEnd" });
