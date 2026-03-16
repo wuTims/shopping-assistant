@@ -77,13 +77,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!tabId) return false;
     activeTabId = tabId;
 
-    const { imageUrl, imageBase64, titleHint, pageUrl, price, currency } = message;
+    const { imageUrl, imageBase64, titleHint, pageUrl, productLink, price, currency } = message;
 
     (async () => {
       await chrome.sidePanel.open({ tabId });
 
+      // Use titleHint if available; otherwise fall back to a price label so
+      // the UI never shows a generic "Product" placeholder.
+      let fallbackName = "";
+      if (!titleHint && typeof price === "number") {
+        const sym = currency === "GBP" ? "£" : currency === "EUR" ? "€" : "$";
+        fallbackName = `${sym}${price % 1 === 0 ? price : price.toFixed(2)}`;
+      }
+
       const product: ProductDisplayInfo = {
-        name: titleHint || "Product",
+        name: titleHint || fallbackName,
         price: typeof price === "number" ? price : null,
         currency: typeof currency === "string" ? currency : null,
         imageUrl,
@@ -92,7 +100,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       };
 
       notifySidePanel(tabId, { type: "searching", product });
-      await searchForProduct(tabId, product, "", pageUrl, imageUrl);
+      await searchForProduct(tabId, product, "", pageUrl, imageUrl, undefined, productLink);
       sendResponse({ status: "ok" });
     })();
 
@@ -154,6 +162,7 @@ async function searchForProduct(
   pageUrl: string,
   imageUrl?: string,
   identification?: ProductIdentification | null,
+  productLink?: string | null,
 ): Promise<void> {
   const imageInput = imageUrl || screenshotDataUrl;
   const imageHash = imageInput ? await computeImageHash(imageInput) : "";
@@ -176,10 +185,11 @@ async function searchForProduct(
     const searchReq: SearchRequest = {
       imageUrl: imageUrl ?? product.imageUrl ?? null,
       imageBase64: croppedBase64 ?? fallbackBase64 ?? null,
-      title: product.name !== "Product" ? product.name : null,
+      title: product.name || null,
       price: product.price,
       currency: product.currency,
       sourceUrl: pageUrl,
+      productLink: productLink ?? null,
       identification: identification ?? null,
     };
 
@@ -213,9 +223,18 @@ async function searchForProduct(
 }
 
 function enrichProduct(product: ProductDisplayInfo, response: SearchResponse): ProductDisplayInfo {
+  // Prefer the title the extension extracted; fall back to the AI-identified
+  // description so the UI never stays on a bare price or empty string.
+  let name = response.originalProduct.title;
+  if (!name) {
+    const desc = response.originalProduct.identification?.description;
+    if (desc) {
+      name = desc.length > 60 ? `${desc.slice(0, 57)}…` : desc;
+    }
+  }
   return {
     ...product,
-    name: response.originalProduct.title ?? product.name,
+    name: name ?? product.name,
     imageUrl: product.imageUrl || response.originalProduct.imageUrl || undefined,
   };
 }

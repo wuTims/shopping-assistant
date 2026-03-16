@@ -26,9 +26,11 @@ export function ProductSection({ product }: Props) {
         <div className="min-w-0">
           <p className="text-xs text-text-muted font-medium">Current Product</p>
           <p className="text-base font-bold text-text-main mt-0.5 truncate max-w-[180px]">
-            {product.name}
-            {priceStr && <span className="text-primary ml-1.5">{priceStr}</span>}
+            {product.name || "Searching…"}
           </p>
+          {priceStr && (
+            <p className="text-sm font-semibold text-primary">{priceStr}</p>
+          )}
           {product.marketplace && (
             <p className="text-xs text-text-muted">on {product.marketplace}</p>
           )}
