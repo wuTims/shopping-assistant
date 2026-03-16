@@ -192,8 +192,21 @@ function HomeRoute() {
 }
 
 function ChatInput() {
-  const { sendChatMessage, chatLoading } = useSidepanelState();
+  const {
+    sendChatMessage, chatLoading, voiceStatus,
+    isVoiceRecording, startVoice, pauseVoice, endVoiceSession,
+  } = useSidepanelState();
   const [input, setInput] = useState("");
+
+  const handleMicToggle = () => {
+    if (isVoiceRecording) {
+      pauseVoice();
+    } else if (voiceStatus === "paused") {
+      endVoiceSession();
+    } else {
+      void startVoice();
+    }
+  };
 
   return (
     <div className="border-t border-white/60 bg-white/70 px-4 py-3 backdrop-blur-xl">
@@ -214,10 +227,18 @@ function ChatInput() {
         <button
           type="button"
           aria-label="Voice chat"
-          onClick={() => {}}
-          className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-white text-text-main shadow-sm"
+          onClick={handleMicToggle}
+          className={`inline-flex h-11 w-11 items-center justify-center rounded-full transition-colors ${
+            isVoiceRecording
+              ? "bg-red-500 text-white animate-pulse"
+              : voiceStatus === "paused"
+                ? "bg-orange-400 text-white"
+                : "bg-white text-text-main shadow-sm"
+          }`}
         >
-          <span className="material-icons text-lg">mic</span>
+          <span className="material-icons text-lg">
+            {isVoiceRecording ? "pause" : voiceStatus === "paused" ? "stop" : "mic"}
+          </span>
         </button>
         <button
           type="button"
@@ -237,7 +258,11 @@ function ChatInput() {
 }
 
 function ChatRoute() {
-  const { currentProduct, displayResults, chatMessages, chatLoading, sendChatMessage } = useSidepanelState();
+  const {
+    currentProduct, displayResults, chatMessages, chatLoading, sendChatMessage,
+    voiceStatus, isVoiceRecording, voiceInputTranscript, voiceOutputTranscript,
+    startVoice, pauseVoice, endVoiceSession,
+  } = useSidepanelState();
 
   return (
     <Shell
@@ -304,7 +329,15 @@ function ChatRoute() {
           </div>
         </section>
         <div className="min-h-0 flex-1">
-          <ChatThread messages={chatMessages} onSendMessage={sendChatMessage} isLoading={chatLoading} showComposer={false} />
+          <ChatThread
+            messages={chatMessages}
+            onSendMessage={sendChatMessage}
+            isLoading={chatLoading}
+            showComposer={false}
+            isVoiceRecording={isVoiceRecording}
+            voiceInputTranscript={voiceInputTranscript}
+            voiceOutputTranscript={voiceOutputTranscript}
+          />
         </div>
         <ChatInput />
       </div>

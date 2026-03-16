@@ -6,9 +6,13 @@ interface Props {
   onSendMessage: (message: string) => void;
   isLoading: boolean;
   showComposer?: boolean;
+  isVoiceRecording?: boolean;
+  voiceInputTranscript?: string;
+  voiceOutputTranscript?: string;
+  onMicToggle?: () => void;
 }
 
-export function ChatThread({ messages, onSendMessage, isLoading, showComposer = true }: Props) {
+export function ChatThread({ messages, onSendMessage, isLoading, showComposer = true, isVoiceRecording, voiceInputTranscript, voiceOutputTranscript, onMicToggle }: Props) {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -26,15 +30,7 @@ export function ChatThread({ messages, onSendMessage, isLoading, showComposer = 
   };
 
   const handleMicClick = () => {
-    const el = document.createElement("div");
-    Object.assign(el.style, {
-      position: "fixed", bottom: "70px", right: "20px",
-      background: "#1a202c", color: "white", padding: "6px 12px",
-      borderRadius: "8px", fontSize: "12px", zIndex: "9999",
-    } as CSSStyleDeclaration);
-    el.textContent = "Voice coming soon";
-    document.body.appendChild(el);
-    setTimeout(() => el.remove(), 2000);
+    onMicToggle?.();
   };
 
   return (
@@ -67,6 +63,23 @@ export function ChatThread({ messages, onSendMessage, isLoading, showComposer = 
             </div>
           </div>
         ))}
+        {isVoiceRecording && voiceInputTranscript && (
+          <div className="flex justify-end">
+            <div className="max-w-[85%] rounded-2xl rounded-br-md bg-primary/60 px-3.5 py-2.5 text-sm text-white/90 italic">
+              {voiceInputTranscript}
+            </div>
+          </div>
+        )}
+        {isVoiceRecording && voiceOutputTranscript && (
+          <div className="flex justify-start">
+            <div className="w-6 h-6 rounded-full bg-accent-green flex items-center justify-center text-white shrink-0 mr-2 mt-1">
+              <span className="material-icons text-xs">smart_toy</span>
+            </div>
+            <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-white/80 border border-gray-100 px-3.5 py-2.5 text-sm text-text-main italic shadow-sm">
+              {voiceOutputTranscript}
+            </div>
+          </div>
+        )}
         {isLoading && (
           <div className="flex justify-start">
             <div className="w-6 h-6 rounded-full bg-accent-green flex items-center justify-center text-white shrink-0 mr-2 mt-1">
@@ -107,9 +120,15 @@ export function ChatThread({ messages, onSendMessage, isLoading, showComposer = 
             ) : (
               <button
                 onClick={handleMicClick}
-                className="w-10 h-10 flex items-center justify-center rounded-xl bg-gray-100 text-text-muted hover:bg-gray-200 transition-colors"
+                className={`w-10 h-10 flex items-center justify-center rounded-xl transition-colors ${
+                  isVoiceRecording
+                    ? "bg-red-500 text-white animate-pulse"
+                    : "bg-gray-100 text-text-muted hover:bg-gray-200"
+                }`}
               >
-                <span className="material-icons text-lg">mic</span>
+                <span className="material-icons text-lg">
+                  {isVoiceRecording ? "stop" : "mic"}
+                </span>
               </button>
             )}
           </div>

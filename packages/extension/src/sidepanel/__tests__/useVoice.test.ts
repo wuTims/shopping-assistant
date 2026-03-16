@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { useVoice } from "../hooks/useVoice";
 
+// WebSocket mock (not provided by setup.ts)
 class MockWebSocket {
   static OPEN = 1;
   static CLOSED = 3;
@@ -21,39 +22,9 @@ class MockWebSocket {
   }
 }
 
-const mockMediaStream = {
-  getTracks: () => [{ stop: vi.fn() }],
-};
-
-const mockGetUserMedia = vi.fn().mockResolvedValue(mockMediaStream);
-
-const mockAudioWorkletNode = {
-  port: { onmessage: null as ((evt: { data: unknown }) => void) | null },
-  connect: vi.fn(),
-  disconnect: vi.fn(),
-};
-
-const mockAudioContext = {
-  audioWorklet: { addModule: vi.fn().mockResolvedValue(undefined) },
-  createMediaStreamSource: vi.fn().mockReturnValue({ connect: vi.fn(), disconnect: vi.fn() }),
-  createBuffer: vi.fn().mockReturnValue({ copyToChannel: vi.fn(), duration: 0.1 }),
-  createBufferSource: vi.fn().mockReturnValue({
-    buffer: null, connect: vi.fn(), start: vi.fn(), stop: vi.fn(), disconnect: vi.fn(),
-    onended: null,
-  }),
-  currentTime: 0,
-  destination: {},
-  close: vi.fn(),
-  state: "running",
-  sampleRate: 24000,
-};
-
 vi.stubGlobal("WebSocket", MockWebSocket);
-vi.stubGlobal("navigator", {
-  mediaDevices: { getUserMedia: mockGetUserMedia },
-});
-vi.stubGlobal("AudioContext", vi.fn().mockImplementation(() => mockAudioContext));
-vi.stubGlobal("AudioWorkletNode", vi.fn().mockImplementation(() => mockAudioWorkletNode));
+
+// AudioContext, AudioWorkletNode, and navigator.mediaDevices are provided by test/setup.ts
 
 describe("useVoice", () => {
   beforeEach(() => {
@@ -77,7 +48,7 @@ describe("useVoice", () => {
       await result.current.start();
     });
 
-    expect(mockGetUserMedia).toHaveBeenCalledWith({ audio: { sampleRate: 16000 } });
+    expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalledWith({ audio: { sampleRate: 16000 } });
   });
 
   it("pauseMic sends audioStreamEnd but keeps session alive", async () => {
