@@ -6,3 +6,5 @@ dist/
 .env.local
 .worktrees/
 .claude/
+Images-Delete/
+UX Design - Delete after use/

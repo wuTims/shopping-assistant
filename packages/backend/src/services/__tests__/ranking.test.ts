@@ -84,6 +84,59 @@ describe("mergeAndDedup", () => {
     ];
     expect(mergeAndDedup(results)).toHaveLength(1);
   });
+
+  it("preserves text-only provenance", () => {
+    const results = [
+      makeResult({ id: "a", retrievalLane: "text", productUrl: "https://amazon.com/a" }),
+    ];
+
+    const deduped = mergeAndDedup(results);
+
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0].retrievalLane).toBe("text");
+  });
+
+  it("preserves image-only provenance", () => {
+    const results = [
+      makeResult({ id: "a", retrievalLane: "image", productUrl: "https://amazon.com/a" }),
+    ];
+
+    const deduped = mergeAndDedup(results);
+
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0].retrievalLane).toBe("image");
+  });
+
+  it("promotes duplicate results across lanes to hybrid", () => {
+    const results = [
+      makeResult({
+        id: "a",
+        retrievalLane: "text",
+        matchedQueries: [{ query: "sony wireless headphones", lane: "text", provider: "brave" }],
+        productUrl: "https://amazon.com/a",
+        price: null,
+        imageUrl: null,
+      }),
+      makeResult({
+        id: "b",
+        retrievalLane: "image",
+        matchedQueries: [{ query: "sony black over ear headphones", lane: "image", provider: "aliexpress" }],
+        productUrl: "https://amazon.com/a",
+        price: 29.99,
+        imageUrl: "https://img.com/a.jpg",
+      }),
+    ];
+
+    const deduped = mergeAndDedup(results);
+
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0].id).toBe("b");
+    expect(deduped[0].retrievalLane).toBe("hybrid");
+    expect(deduped[0].matchedQueries).toEqual([
+      { query: "sony black over ear headphones", lane: "image", provider: "aliexpress" },
+      { query: "sony wireless headphones", lane: "text", provider: "brave" },
+    ]);
+  });
 });
 
 describe("applyRanking", () => {
@@ -240,6 +293,24 @@ describe("buildFallbackScores", () => {
     const withoutSource = buildFallbackScores(results, baseIdentification, null);
     expect(withoutSource.a).toBeGreaterThan(withSource.a);
   });
+
+  it("gives hybrid retrieval matches a small score boost", () => {
+    const results = [
+      makeResult({ id: "a", title: "Sony Wireless Headphones", retrievalLane: "text" }),
+      makeResult({ id: "b", title: "Sony Wireless Headphones", retrievalLane: "hybrid" }),
+    ];
+    const scores = buildFallbackScores(results, baseIdentification);
+    expect(scores.b).toBeGreaterThan(scores.a);
+  });
+
+  it("does not let the hybrid boost overpower a much better semantic match", () => {
+    const results = [
+      makeResult({ id: "a", title: "Sony Wireless Bluetooth Headphones", retrievalLane: "text" }),
+      makeResult({ id: "b", title: "Random Gadget", retrievalLane: "hybrid" }),
+    ];
+    const scores = buildFallbackScores(results, baseIdentification);
+    expect(scores.a).toBeGreaterThan(scores.b);
+  });
 });
 
 describe("heuristicPreSort", () => {
@@ -289,6 +360,15 @@ describe("heuristicPreSort", () => {
       makeResult({ id: "b", title: "Sony Wireless Headphones", marketplace: "eBay" }),
     ];
     const sorted = heuristicPreSort(results, baseIdentification, null, "Amazon");
+    expect(sorted[0].id).toBe("b");
+  });
+
+  it("prefers hybrid retrieval matches when other signals are tied", () => {
+    const results = [
+      makeResult({ id: "a", title: "Sony Wireless Headphones", retrievalLane: "text" }),
+      makeResult({ id: "b", title: "Sony Wireless Headphones", retrievalLane: "hybrid" }),
+    ];
+    const sorted = heuristicPreSort(results, baseIdentification, null);
     expect(sorted[0].id).toBe("b");
   });
 });

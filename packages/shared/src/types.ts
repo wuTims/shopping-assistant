@@ -80,9 +80,36 @@ export interface ProductIdentification {
   } | null;
 }
 
+export interface MatchedQuery {
+  query: string;
+  lane: "text" | "image";
+  provider: "brave" | "aliexpress";
+}
+
+export type ResultUrlClassification =
+  | "product_detail"
+  | "search_results"
+  | "category_listing"
+  | "store_front"
+  | "seller_store"
+  | "unknown";
+
+export type ResultPriceSource =
+  | "provider_structured"
+  | "provider_snippet"
+  | "fallback_screenshot"
+  | "none";
+
+export type ResultValidationStatus = "valid" | "invalid" | "unknown";
+
 export interface SearchResult {
   id: string;
   source: "gemini_grounding" | "brave" | "aliexpress";
+  retrievalLane?: "text" | "image" | "hybrid";
+  matchedQueries?: MatchedQuery[];
+  urlClassification?: ResultUrlClassification;
+  priceSource?: ResultPriceSource;
+  validationStatus?: ResultValidationStatus;
   title: string;
   price: number | null;
   currency: string | null;
@@ -142,6 +169,16 @@ export interface SearchResponse {
         timedOutQueries: number;
       };
     };
+    laneDiagnostics: {
+      textResultCount: number;
+      imageResultCount: number;
+      hybridResultCount: number;
+    };
+    imageQueryDiagnostics: {
+      rawQueryCount: number;
+      acceptedQueries: string[];
+      rejectedQueries: string[];
+    };
     searchDurationMs: number;
     rankingDurationMs: number;
     rankingStatus: "ok" | "fallback";
@@ -181,6 +218,7 @@ export interface ChatProductContext {
 
 /** Service Worker → Side Panel messages */
 export type BackgroundToSidePanelMessage =
+  | { target: "sidepanel"; type: "empty" }
   | { target: "sidepanel"; type: "identifying" }
   | { target: "sidepanel"; type: "product_selection"; products: IdentifiedProduct[]; screenshotDataUrl: string; pageUrl: string; tabId: number }
   | { target: "sidepanel"; type: "searching"; product: ProductDisplayInfo }

@@ -84,6 +84,118 @@ export async function identifyProduct(
 
 // ── identifyFromScreenshot ───────────────────────────────────────────────
 
+export interface SanitizedImageQueries {
+  acceptedQueries: string[];
+  rejectedQueries: string[];
+}
+
+const LOW_SIGNAL_IMAGE_QUERY_PATTERNS = new Set([
+  "tool cart",
+  "rolling cart",
+  "storage cart",
+  "utility cart",
+  "metal cart",
+]);
+
+export function sanitizeImageSearchQueries(
+  rawQueries: string[],
+  titleHint: string | null = null,
+): SanitizedImageQueries {
+  const unique: string[] = [];
+  const rejected: string[] = [];
+  const seen = new Set<string>();
+
+  for (const rawQuery of rawQueries) {
+    const normalized = rawQuery.trim().replace(/\s+/g, " ");
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (isLowSignalImageQuery(normalized)) {
+      rejected.push(normalized);
+      continue;
+    }
+    unique.push(normalized);
+    if (unique.length >= 5) break;
+  }
+
+  if (unique.length > 0) {
+    return { acceptedQueries: unique, rejectedQueries: rejected };
+  }
+
+  const fallback = buildImageQueryFallback(titleHint);
+  return {
+    acceptedQueries: fallback ? [fallback] : [],
+    rejectedQueries: rejected,
+  };
+}
+
+export function normalizeImageSearchQueries(rawQueries: string[], titleHint: string | null = null): string[] {
+  return sanitizeImageSearchQueries(rawQueries, titleHint).acceptedQueries;
+}
+
+export async function generateImageSearchQueries(
+  imageSource: string | FetchedImage,
+  titleHint: string | null,
+): Promise<string[]> {
+  const prompt = [
+    "You generate image-first shopping search queries for a shopping comparison tool.",
+    "Look at the product image first and use any title hint only as secondary context.",
+    "Return 3 to 5 concise shopping queries for exact or near-match products.",
+    "Queries must stay short, concrete, and suitable for marketplace or image search.",
+    "Prefer visible attributes like category, material, color, silhouette, hardware, pattern, and style.",
+    titleHint ? `Optional title hint: \"${titleHint}\"` : "No title hint is available.",
+  ].join("\n");
+
+  const productImage = typeof imageSource === "string"
+    ? await fetchImage(imageSource)
+    : imageSource;
+
+  const response = await ai.models.generateContent({
+    model,
+    contents: [
+      { inlineData: { mimeType: productImage.mimeType, data: productImage.data } },
+      prompt,
+    ],
+    config: {
+      responseMimeType: "application/json",
+      responseJsonSchema: {
+        type: Type.OBJECT,
+        properties: {
+          queries: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING },
+            minItems: 3,
+            maxItems: 5,
+          },
+        },
+        required: ["queries"],
+      },
+    },
+  });
+
+  const parsed = JSON.parse(response.text ?? "{}") as { queries?: string[] };
+  return parsed.queries ?? [];
+}
+
+function isLowSignalImageQuery(query: string): boolean {
+  const normalized = query.trim().toLowerCase();
+  if (LOW_SIGNAL_IMAGE_QUERY_PATTERNS.has(normalized)) return true;
+
+  const tokens = normalized.split(/\s+/).filter(Boolean);
+  if (tokens.length >= 3) return false;
+  if (tokens.some((token) => /\d/.test(token) && /[a-z]/i.test(token))) return false;
+  return true;
+}
+
+function buildImageQueryFallback(titleHint: string | null): string | null {
+  const fallback = titleHint
+    ?.replace(/\s*[-|]\s*(Amazon|eBay|Walmart|Target|Best Buy|AliExpress).*$/i, "")
+    .trim()
+    .replace(/\s+/g, " ");
+  return fallback ? `buy ${fallback}` : null;
+}
+
 export async function identifyFromScreenshot(
   screenshotBase64: string,
 ): Promise<{ products: Array<{ name: string; price: number | null; currency: string | null; boundingBox: { x: number; y: number; width: number; height: number } | null }>; pageType: "product_detail" | "product_listing" | "unknown" }> {

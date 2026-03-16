@@ -105,6 +105,53 @@ describe("normalizeTextSearchResults", () => {
     expect(results).toHaveLength(1);
     expect(results[0].price).toBe(5);
   });
+
+  it("builds clean URL from itemId, ignoring promotional params in itemUrl", () => {
+    const apiResponse = {
+      aliexpress_ds_text_search_response: {
+        data: {
+          products: {
+            selection_search_product: [
+              {
+                itemId: "3256810414855224",
+                title: "Product With Promo URL",
+                itemMainPic: "//img.com/x.jpg",
+                targetSalePrice: "28.34",
+                targetOriginalPriceCurrency: "USD",
+                itemUrl: "//www.aliexpress.com/item/3256810414855224.html?pdp_npi=6%40dis%21USD%2156.68&gatewayAdapt=glo2usa",
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const results = normalizeTextSearchResults(apiResponse);
+    expect(results[0].productUrl).toBe("https://www.aliexpress.com/item/3256810414855224.html");
+  });
+
+  it("falls back to itemUrl when itemId is missing", () => {
+    const apiResponse = {
+      aliexpress_ds_text_search_response: {
+        data: {
+          products: {
+            selection_search_product: [
+              {
+                title: "No ID Product",
+                itemMainPic: "//img.com/x.jpg",
+                targetSalePrice: "10.00",
+                targetOriginalPriceCurrency: "USD",
+                itemUrl: "//www.aliexpress.com/item/999.html",
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const results = normalizeTextSearchResults(apiResponse);
+    expect(results[0].productUrl).toBe("https://www.aliexpress.com/item/999.html");
+  });
 });
 
 describe("normalizeImageSearchResults", () => {
@@ -139,5 +186,28 @@ describe("normalizeImageSearchResults", () => {
     expect(results[0].currency).toBe("USD");
     expect(results[0].productUrl).toBe("https://www.aliexpress.com/item/3256807996818647.html");
     expect(results[0].marketplace).toBe("AliExpress");
+  });
+
+  it("builds clean URL from product_id, ignoring promo params in product_detail_url", () => {
+    const apiResponse = {
+      aliexpress_ds_image_search_response: {
+        data: {
+          products: {
+            traffic_image_product_d_t_o: [
+              {
+                product_id: "3256807996818647",
+                product_title: "Test Product",
+                target_sale_price: "5.00",
+                target_sale_price_currency: "USD",
+                product_detail_url: "https://www.aliexpress.com/item/3256807996818647.html?pdp_npi=xxx&gatewayAdapt=glo2usa",
+              },
+            ],
+          },
+        },
+      },
+    };
+
+    const results = normalizeImageSearchResults(apiResponse);
+    expect(results[0].productUrl).toBe("https://www.aliexpress.com/item/3256807996818647.html");
   });
 });

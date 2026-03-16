@@ -3,7 +3,7 @@
   "name": "Shopping Source Discovery",
   "version": "0.1.0",
   "description": "Find cheaper alternatives for any product you see online.",
-  "permissions": ["sidePanel", "storage", "activeTab"],
+  "permissions": ["sidePanel", "storage", "activeTab", "scripting"],
   "host_permissions": ["http://localhost:8080/*"],
   "background": {
     "service_worker": "src/background/index.ts",

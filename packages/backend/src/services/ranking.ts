@@ -1,4 +1,4 @@
-import type { ProductIdentification, SearchResult, RankedResult } from "@shopping-assistant/shared";
+import type { MatchedQuery, ProductIdentification, SearchResult, RankedResult } from "@shopping-assistant/shared";
 import { CONFIDENCE_THRESHOLDS, MIN_CONFIDENCE_SCORE, MIN_DISPLAY_RESULTS, SOURCE_MARKETPLACE_PENALTY, MAX_SOURCE_MARKETPLACE_RESULTS } from "@shopping-assistant/shared";
 
 // ── mergeAndDedup ────────────────────────────────────────────────────────────
@@ -16,7 +16,9 @@ export function mergeAndDedup(results: SearchResult[]): SearchResult[] {
       const existing = seen.get(normalizedUrl)!;
       urlDedups++;
       if (resultRichness(result) > resultRichness(existing)) {
-        seen.set(normalizedUrl, result);
+        seen.set(normalizedUrl, mergeRetrievalLane(result, existing));
+      } else {
+        seen.set(normalizedUrl, mergeRetrievalLane(existing, result));
       }
       continue;
     }
@@ -31,7 +33,9 @@ export function mergeAndDedup(results: SearchResult[]): SearchResult[] {
         // Keep the one with more data
         if (resultRichness(result) > resultRichness(existing)) {
           seen.delete(normalizeUrl(existing.productUrl));
-          seen.set(normalizedUrl, result);
+          seen.set(normalizedUrl, mergeRetrievalLane(result, existing));
+        } else {
+          seen.set(normalizeUrl(existing.productUrl), mergeRetrievalLane(existing, result));
         }
         isDuplicate = true;
         break;
@@ -155,18 +159,19 @@ export function buildFallbackScores(
     const brandBoost = brand && result.title.toLowerCase().includes(brand) ? 0.25 : 0;
     const categoryBoost = categoryTokens.some((t) => resultTokens.has(t)) ? 0.1 : 0;
     const richnessBoost = (result.imageUrl ? 0.04 : 0) + (result.price !== null ? 0.04 : 0);
+    const hybridBoost = result.retrievalLane === "hybrid" ? HYBRID_LANE_BOOST : 0;
     const sourcePenalty =
       sourceMarketplace && baseMarketplace(result.marketplace) === baseMarketplace(sourceMarketplace)
         ? SOURCE_MARKETPLACE_PENALTY
         : 0;
-    const rawScore = 0.12 + overlapRatio * 0.55 + brandBoost + categoryBoost + richnessBoost - sourcePenalty;
+    const rawScore = 0.12 + overlapRatio * 0.55 + brandBoost + categoryBoost + richnessBoost + hybridBoost - sourcePenalty;
 
     scores[result.id] = clamp(rawScore, 0, 0.95);
 
     console.log(
       `[text-scoring]   [${result.id}] "${result.title.slice(0, 50)}": ` +
       `overlap=${overlap}/${referenceTokens.size} (${(overlapRatio * 100).toFixed(0)}%) ` +
-      `brand=${brandBoost.toFixed(2)} cat=${categoryBoost.toFixed(2)} rich=${richnessBoost.toFixed(2)} ` +
+      `brand=${brandBoost.toFixed(2)} cat=${categoryBoost.toFixed(2)} rich=${richnessBoost.toFixed(2)} hybrid=${hybridBoost.toFixed(2)} ` +
       `src=${sourcePenalty > 0 ? `-${sourcePenalty.toFixed(2)}` : "0.00"} ` +
       `→ ${scores[result.id].toFixed(3)} [${matchedTokens.join(",")}]`,
     );
@@ -181,6 +186,7 @@ const KNOWN_MARKETPLACES = new Set([
   "Amazon", "eBay", "Walmart", "Target", "Best Buy", "Newegg",
   "B&H Photo", "Costco", "AliExpress", "Etsy",
 ]);
+const HYBRID_LANE_BOOST = 0.05;
 
 export function heuristicPreSort(
   results: SearchResult[],
@@ -223,13 +229,14 @@ export function heuristicPreSort(
 
     // Known marketplace boost
     const marketplaceScore = KNOWN_MARKETPLACES.has(r.marketplace) ? 0.05 : 0;
+    const hybridBoost = r.retrievalLane === "hybrid" ? HYBRID_LANE_BOOST : 0;
 
     const sourcePenalty =
       sourceMarketplace && baseMarketplace(r.marketplace) === baseMarketplace(sourceMarketplace)
         ? SOURCE_MARKETPLACE_PENALTY
         : 0;
 
-    const total = overlapScore * 0.4 + brandScore + hasPrice + hasImage + priceProximity + marketplaceScore - sourcePenalty;
+    const total = overlapScore * 0.4 + brandScore + hasPrice + hasImage + priceProximity + marketplaceScore + hybridBoost - sourcePenalty;
     return { result: r, score: total };
   });
 
@@ -355,6 +362,36 @@ function resultRichness(r: SearchResult): number {
   if (r.snippet) score += 1;
   if (r.structuredData?.rating) score += 1;
   return score;
+}
+
+function mergeRetrievalLane(primary: SearchResult, duplicate: SearchResult): SearchResult {
+  const primaryLane = primary.retrievalLane;
+  const duplicateLane = duplicate.retrievalLane;
+  const matchedQueries = mergeMatchedQueries(primary, duplicate);
+
+  if (!primaryLane) {
+    return matchedQueries ? { ...primary, matchedQueries } : primary;
+  }
+  if (!duplicateLane || duplicateLane === primaryLane) {
+    return matchedQueries ? { ...primary, matchedQueries } : primary;
+  }
+
+  return { ...primary, retrievalLane: "hybrid", ...(matchedQueries ? { matchedQueries } : {}) };
+}
+
+function mergeMatchedQueries(primary: SearchResult, duplicate: SearchResult): MatchedQuery[] | undefined {
+  const merged = [...(primary.matchedQueries ?? []), ...(duplicate.matchedQueries ?? [])];
+  if (merged.length === 0) return undefined;
+
+  const deduped = new Map<string, MatchedQuery>();
+  for (const entry of merged) {
+    deduped.set(normalizeMatchedQueryKey(entry), entry);
+  }
+  return Array.from(deduped.values());
+}
+
+function normalizeMatchedQueryKey(entry: MatchedQuery): string {
+  return `${entry.provider}:${entry.lane}:${entry.query.trim().toLowerCase()}`;
 }
 
 function scoreToConfidence(score: number): "high" | "medium" | "low" {

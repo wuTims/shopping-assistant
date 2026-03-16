@@ -1,0 +1,126 @@
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import type { ProductDisplayInfo, RankedResult, SearchResponse } from "@shopping-assistant/shared";
+import App from "../App";
+
+const product: ProductDisplayInfo = {
+  name: "Compact Leather Tote",
+  price: 99.99,
+  currency: "USD",
+};
+
+const results: RankedResult[] = Array.from({ length: 4 }, (_, index) => ({
+  rank: index + 1,
+  confidence: "high",
+  confidenceScore: 0.95 - index * 0.05,
+  priceDelta: -20,
+  savingsPercent: 20,
+  comparisonNotes: "Near match",
+  priceAvailable: true,
+  result: {
+    id: `res-${index + 1}`,
+    source: "brave",
+    retrievalLane: "image",
+    matchedQueries: [{ query: "compact leather tote", lane: "image", provider: "brave" }],
+    title: `Compact Leather Tote Variant ${index + 1}`,
+    price: 79.99 + index,
+    currency: "USD",
+    imageUrl: "https://example.com/result.jpg",
+    productUrl: `https://example.com/result-${index + 1}`,
+    marketplace: `Marketplace ${index + 1}`,
+    snippet: "Near match",
+    structuredData: null,
+    raw: {},
+  },
+}));
+
+const response: SearchResponse = {
+  requestId: "req-chat",
+  originalProduct: {
+    title: product.name,
+    price: product.price,
+    currency: product.currency,
+    imageUrl: "",
+    identification: {
+      category: "bag",
+      description: "Structured leather tote",
+      brand: "Example",
+      attributes: {
+        color: "tan",
+        material: "leather",
+        style: "structured",
+        size: "medium",
+      },
+      searchQueries: ["compact leather tote"],
+      estimatedPriceRange: {
+        low: 70,
+        high: 120,
+        currency: "USD",
+      },
+    },
+  },
+  results,
+  searchMeta: {
+    totalFound: 4,
+    braveResultCount: 4,
+    groundingResultCount: 0,
+    sourceStatus: {
+      brave: "ok",
+      grounding: "ok",
+    },
+    sourceDiagnostics: {
+      brave: {
+        totalQueries: 1,
+        successfulQueries: 1,
+        failedQueries: 0,
+        timedOutQueries: 0,
+      },
+      grounding: {
+        totalQueries: 0,
+        successfulQueries: 0,
+        failedQueries: 0,
+        timedOutQueries: 0,
+      },
+    },
+    laneDiagnostics: {
+      textResultCount: 0,
+      imageResultCount: 4,
+      hybridResultCount: 0,
+    },
+    searchDurationMs: 1500,
+    rankingDurationMs: 200,
+    rankingStatus: "ok",
+    imageQueryDiagnostics: {
+      rawQueryCount: 0,
+      acceptedQueries: [],
+      rejectedQueries: [],
+    },
+    rankingFailureReason: null,
+  },
+};
+
+describe("chat page", () => {
+  it("shows a horizontal compact-results strip and a single dedicated composer", () => {
+    render(
+      <App
+        initialPath="/chat"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("chat-results-strip")).toHaveClass("overflow-x-auto");
+    expect(screen.getByText("Marketplace 4")).toBeInTheDocument();
+    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "How do these compare?" } });
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", code: "Enter" });
+
+    expect(screen.getByText("How do these compare?")).toBeInTheDocument();
+  });
+});

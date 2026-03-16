@@ -1,8 +1,8 @@
 import { createHmac, randomUUID } from "node:crypto";
 import type { SearchResult } from "@shopping-assistant/shared";
 import type { FetchedImage } from "./gemini.js";
-import type { ProviderSearchOutcome } from "./provider-outcome.js";
-import { resolveProviderStatus } from "./provider-outcome.js";
+import type { ProviderSearchOutcome, SplitProviderSearchOutcome } from "./provider-outcome.js";
+import { emptyProviderOutcome, resolveProviderStatus } from "./provider-outcome.js";
 import { isLikelyTimeoutError } from "../utils/errors.js";
 
 const BASE_URL = "https://api-sg.aliexpress.com/sync";
@@ -154,6 +154,14 @@ export async function searchAliExpress(
   queries: string[],
   image: FetchedImage | null,
 ): Promise<ProviderSearchOutcome> {
+  const outcomes = await searchAliExpressSplit(queries, image);
+  return outcomes.combinedOutcome;
+}
+
+export async function searchAliExpressSplit(
+  queries: string[],
+  image: FetchedImage | null,
+): Promise<SplitProviderSearchOutcome> {
   if (!hasValidToken()) {
     const hasKey = APP_KEY !== "";
     const hasSecret = APP_SECRET !== "";
@@ -166,12 +174,9 @@ export async function searchAliExpress(
       (expired ? `, expired ${Math.round((Date.now() - tokenExpiry) / 1000)}s ago` : ""),
     );
     return {
-      results: [],
-      status: "ok",
-      totalQueries: 0,
-      successfulQueries: 0,
-      failedQueries: 0,
-      timedOutQueries: 0,
+      textOutcome: emptyProviderOutcome(),
+      imageOutcome: emptyProviderOutcome(),
+      combinedOutcome: emptyProviderOutcome(),
     };
   }
 
@@ -182,20 +187,47 @@ export async function searchAliExpress(
     console.log(`[aliexpress]   Text query: "${q.slice(0, 100)}"`);
   }
 
-  const promises: Promise<SearchResult[]>[] = [];
+  const textPromises: Promise<SearchResult[]>[] = [];
 
   // Text searches
   for (const query of queries) {
-    promises.push(textSearch(query));
+    textPromises.push(textSearch(query));
   }
 
   // Image search (if image available)
-  if (image) {
-    promises.push(imageSearch(image));
-  }
+  const imagePromises = image ? [imageSearch(image)] : [];
 
-  const outcomes = await Promise.allSettled(promises);
+  const [textOutcomes, imageOutcomes] = await Promise.all([
+    Promise.allSettled(textPromises),
+    Promise.allSettled(imagePromises),
+  ]);
 
+  const textOutcome = collectOutcomeResults(
+    textOutcomes,
+    queries.map((query) => `text("${query.slice(0, 60)}")`),
+  );
+  const imageOutcome = collectOutcomeResults(
+    imageOutcomes,
+    image ? ["image"] : [],
+  );
+
+  console.log(
+    `[aliexpress] Total: ${textOutcome.results.length + imageOutcome.results.length} results ` +
+    `(${textOutcome.successfulQueries + imageOutcome.successfulQueries} succeeded, ` +
+    `${textOutcome.failedQueries + imageOutcome.failedQueries} failed)`,
+  );
+
+  return {
+    textOutcome,
+    imageOutcome,
+    combinedOutcome: combineProviderOutcomes(textOutcome, imageOutcome),
+  };
+}
+
+function collectOutcomeResults(
+  outcomes: PromiseSettledResult<SearchResult[]>[],
+  labels: string[],
+): ProviderSearchOutcome {
   const results: SearchResult[] = [];
   let successfulQueries = 0;
   let failedQueries = 0;
@@ -203,7 +235,7 @@ export async function searchAliExpress(
 
   for (let i = 0; i < outcomes.length; i++) {
     const outcome = outcomes[i];
-    const queryType = i < textCount ? `text("${queries[i].slice(0, 60)}")` : "image";
+    const queryType = labels[i] ?? `query_${i}`;
     if (outcome.status === "fulfilled") {
       console.log(`[aliexpress] ${queryType}: ${outcome.value.length} results`);
       results.push(...outcome.value);
@@ -217,15 +249,28 @@ export async function searchAliExpress(
     }
   }
 
-  console.log(`[aliexpress] Total: ${results.length} results (${successfulQueries} succeeded, ${failedQueries} failed)`);
-
   return {
     results,
     status: resolveProviderStatus(successfulQueries, failedQueries, timedOutQueries),
-    totalQueries: promises.length,
+    totalQueries: outcomes.length,
     successfulQueries,
     failedQueries,
     timedOutQueries,
+  };
+}
+
+function combineProviderOutcomes(a: ProviderSearchOutcome, b: ProviderSearchOutcome): ProviderSearchOutcome {
+  return {
+    results: [...a.results, ...b.results],
+    status: resolveProviderStatus(
+      a.successfulQueries + b.successfulQueries,
+      a.failedQueries + b.failedQueries,
+      a.timedOutQueries + b.timedOutQueries,
+    ),
+    totalQueries: a.totalQueries + b.totalQueries,
+    successfulQueries: a.successfulQueries + b.successfulQueries,
+    failedQueries: a.failedQueries + b.failedQueries,
+    timedOutQueries: a.timedOutQueries + b.timedOutQueries,
   };
 }
 
@@ -237,6 +282,25 @@ function prependHttps(url: string): string {
   if (url.startsWith("//")) return `https:${url}`;
   if (!url.startsWith("http")) return `https://${url}`;
   return url;
+}
+
+/**
+ * Build a clean, stable AliExpress product URL from a product ID.
+ * API-returned URLs contain time-limited promotional parameters
+ * (pdp_npi, gatewayAdapt) that cause pages to break after the
+ * promotion expires.
+ */
+function buildCleanProductUrl(
+  productId: unknown,
+  fallbackUrl: unknown,
+): string {
+  if (productId && typeof productId === "string") {
+    return `https://www.aliexpress.com/item/${productId}.html`;
+  }
+  if (typeof productId === "number") {
+    return `https://www.aliexpress.com/item/${productId}.html`;
+  }
+  return typeof fallbackUrl === "string" ? prependHttps(fallbackUrl) : "";
 }
 
 export function normalizeTextSearchResults(data: unknown): SearchResult[] {
@@ -261,8 +325,9 @@ export function normalizeTextSearchResults(data: unknown): SearchResult[] {
       currency: typeof item.targetOriginalPriceCurrency === "string"
         ? item.targetOriginalPriceCurrency
         : "USD",
+      priceSource: price !== null && !isNaN(price) ? "provider_structured" : "none",
       imageUrl: item.itemMainPic ? prependHttps(String(item.itemMainPic)) : null,
-      productUrl: item.itemUrl ? prependHttps(String(item.itemUrl)) : "",
+      productUrl: buildCleanProductUrl(item.itemId, item.itemUrl),
       marketplace: "AliExpress",
       snippet: null,
       structuredData: {
@@ -298,12 +363,11 @@ export function normalizeImageSearchResults(data: unknown): SearchResult[] {
       currency: typeof item.target_sale_price_currency === "string"
         ? item.target_sale_price_currency
         : "USD",
+      priceSource: price !== null && !isNaN(price) ? "provider_structured" : "none",
       imageUrl: typeof item.product_main_image_url === "string"
         ? item.product_main_image_url
         : null,
-      productUrl: typeof item.product_detail_url === "string"
-        ? item.product_detail_url
-        : "",
+      productUrl: buildCleanProductUrl(item.product_id, item.product_detail_url),
       marketplace: "AliExpress",
       snippet: null,
       structuredData: {

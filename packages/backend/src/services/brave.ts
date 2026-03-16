@@ -15,6 +15,28 @@ function isShoppingDomain(url: string): boolean {
   return isKnownMarketplaceDomain(url);
 }
 
+const GENERIC_LISTING_PATH_PATTERNS = [
+  /^\/search(?:\/|$)/i,
+  /^\/browse(?:\/|$)/i,
+  /^\/c(?:\/|$)/i,
+  /^\/b(?:\/|$)/i,
+  /^\/shop(?:\/|$)/i,
+  /^\/collections?(?:\/|$)/i,
+  /^\/category(?:\/|$)/i,
+];
+
+const PRODUCT_DETAIL_PATH_PATTERNS: Array<{ host: RegExp; path: RegExp }> = [
+  { host: /(^|\.)walmart\.com$/i, path: /^\/ip(?:\/|$)/i },
+  { host: /(^|\.)amazon\./i, path: /^\/(?:dp|gp\/product)(?:\/|$)/i },
+  { host: /(^|\.)ebay\./i, path: /^\/itm(?:\/|$)/i },
+  { host: /(^|\.)target\.com$/i, path: /^\/p\/(?:-|$)/i },
+  { host: /(^|\.)bestbuy\.com$/i, path: /^\/site\/(?!searchpage)/i },
+  { host: /(^|\.)homedepot\.com$/i, path: /^\/p\/(?:-|$)/i },
+  { host: /(^|\.)lowes\.com$/i, path: /^\/pd\/(?:-|$)/i },
+  { host: /(^|\.)etsy\.com$/i, path: /^\/listing\/\d+/i },
+  { host: /(^|\.)aliexpress\.com$/i, path: /^\/item\/(?:-|$|[\w-]+\.html)/i },
+];
+
 interface BraveWebResult {
   title: string;
   url: string;
@@ -74,6 +96,7 @@ export async function searchProducts(queries: string[]): Promise<ProviderSearchO
               title: product.name ?? item.title,
               price: parsed.price,
               currency: parsed.currency,
+              priceSource: parsed.price !== null ? "provider_structured" : "none",
               imageUrl: product.thumbnail?.src ?? null,
               productUrl: product.url,
               marketplace: extractMarketplace(product.url),
@@ -88,7 +111,7 @@ export async function searchProducts(queries: string[]): Promise<ProviderSearchO
         // represented by product_cluster entries (which have structured prices and direct URLs).
         // The parent URL for clustered results is typically a search/category page with no price.
         const isShoppingSite = isShoppingDomain(item.url);
-        if (!item.product_cluster?.length && isShoppingSite) {
+        if (!item.product_cluster?.length && isShoppingSite && isLikelyProductDetailUrl(item.url)) {
           const parsed = parsePriceFromSnippets(item);
           queryResults.push({
             id: `brave_${idCounter++}`,
@@ -96,6 +119,7 @@ export async function searchProducts(queries: string[]): Promise<ProviderSearchO
             title: item.title,
             price: parsed.price,
             currency: parsed.currency,
+            priceSource: parsed.price !== null ? "provider_snippet" : "none",
             imageUrl: item.thumbnail?.src ?? null,
             productUrl: item.url,
             marketplace: extractMarketplace(item.url),
@@ -166,6 +190,28 @@ export function parsePrice(raw: string | null): { price: number | null; currency
   return { price: null, currency: null };
 }
 
+export function isLikelyProductDetailUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.replace(/^www\./i, "");
+    const pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+
+    for (const { host, path } of PRODUCT_DETAIL_PATH_PATTERNS) {
+      if (host.test(hostname)) {
+        return path.test(pathname);
+      }
+    }
+
+    if (parsed.searchParams.has("q") || parsed.searchParams.has("query")) {
+      return false;
+    }
+
+    return !GENERIC_LISTING_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
+  } catch {
+    return false;
+  }
+}
+
 function parsePriceFromSnippets(item: BraveWebResult): { price: number | null; currency: string | null } {
   // Try description first, then extra_snippets
   const texts = [item.description, ...(item.extra_snippets ?? [])].filter(Boolean);
@@ -205,6 +251,7 @@ export function normalizeBraveImageResults(data: unknown): SearchResult[] {
       title: item.title ?? "",
       price: parsed.price,
       currency: parsed.currency,
+      priceSource: parsed.price !== null ? "provider_snippet" : "none",
       imageUrl: item.thumbnail?.src ?? item.properties?.placeholder ?? item.properties?.url ?? null,
       productUrl: item.url,
       marketplace: extractMarketplace(item.url),

@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import type { SearchResult } from "@shopping-assistant/shared";
 import {
   MAX_IMAGES_FOR_EMBEDDING,
@@ -52,6 +53,21 @@ const IMAGE_FETCH_TIMEOUT_MS = 3_000;
 
 const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 
+/** MIME types natively accepted by the Gemini embedding model. */
+const EMBEDDING_NATIVE_MIMES = new Set(["image/jpeg", "image/png", "image/gif"]);
+
+/**
+ * Convert a webp (or other non-native) image to PNG for the embedding model.
+ * Returns the original image unchanged if already in a native format.
+ */
+async function ensureEmbeddingCompatible(image: FetchedImage): Promise<FetchedImage> {
+  if (EMBEDDING_NATIVE_MIMES.has(image.mimeType)) return image;
+
+  const inputBuffer = Buffer.from(image.data, "base64");
+  const pngBuffer = await sharp(inputBuffer).png().toBuffer();
+  return { data: pngBuffer.toString("base64"), mimeType: "image/png" };
+}
+
 /**
  * Embed a single image using gemini-embedding-2-preview.
  * Throws on invalid input (empty data, unsupported MIME type).
@@ -65,9 +81,11 @@ export async function embedImage(image: FetchedImage): Promise<number[]> {
     throw new Error(`Unsupported image MIME type for embedding: ${image.mimeType}`);
   }
 
+  const compatible = await ensureEmbeddingCompatible(image);
+
   const response = await ai.models.embedContent({
     model: embeddingModel,
-    contents: [{ inlineData: { mimeType: image.mimeType, data: image.data } }],
+    contents: [{ inlineData: { mimeType: compatible.mimeType, data: compatible.data } }],
     config: {
       outputDimensionality: EMBEDDING_DIMS,
     },
