@@ -14,6 +14,70 @@ function buildSystemInstruction(): string {
   );
 }
 
+function formatMoney(price: unknown, currency: unknown): string | null {
+  if (typeof price !== "number") return null;
+  return `${typeof currency === "string" ? currency : "USD"} ${price}`;
+}
+
+export function buildVoiceContextTurnText(contextData: Record<string, unknown>): string {
+  const parts: string[] = [];
+
+  const focusedProduct = contextData.focusedProduct;
+  if (focusedProduct && typeof focusedProduct === "object") {
+    const product = focusedProduct as Record<string, unknown>;
+    parts.push("[Focused item]");
+    parts.push(`Name: ${String(product.title ?? product.name ?? "Unknown")}`);
+    if (typeof product.marketplace === "string") {
+      parts.push(`Marketplace: ${product.marketplace}`);
+    }
+    const focusedPrice = formatMoney(product.price, product.currency);
+    if (focusedPrice) {
+      parts.push(`Price: ${focusedPrice}`);
+    }
+    if (typeof product.productUrl === "string") {
+      parts.push(`URL: ${product.productUrl}`);
+    }
+    parts.push("");
+  }
+
+  const currentProduct = contextData.currentProduct;
+  if (currentProduct && typeof currentProduct === "object") {
+    const product = currentProduct as Record<string, unknown>;
+    parts.push("[Original product]");
+    parts.push(`Name: ${String(product.title ?? product.name ?? "Unknown")}`);
+    if (typeof product.marketplace === "string") {
+      parts.push(`Marketplace: ${product.marketplace}`);
+    }
+    const originalPrice = formatMoney(product.price, product.currency);
+    if (originalPrice) {
+      parts.push(`Price: ${originalPrice}`);
+    }
+    parts.push("");
+  }
+
+  const results = contextData.results;
+  if (Array.isArray(results) && results.length > 0) {
+    parts.push("[Top alternatives]");
+    for (const result of results.slice(0, 5)) {
+      if (!result || typeof result !== "object") continue;
+      const item = result as Record<string, unknown>;
+      const priceLabel = formatMoney(item.price, item.currency);
+      parts.push(
+        `#${typeof item.rank === "number" ? item.rank : "?"} ${String(item.title ?? "Unknown")} from ${String(item.marketplace ?? "Unknown")}${priceLabel ? ` — ${priceLabel}` : ""}`,
+      );
+    }
+    parts.push("");
+  }
+
+  if (typeof contextData.guidance === "string") {
+    parts.push(`[Guidance] ${contextData.guidance}`);
+  } else {
+    parts.push("[Guidance] Answer about the focused item first unless the user asks to compare multiple options.");
+  }
+
+  return parts.join("\n");
+}
+
 function sendToClient(ws: WSContext, message: WsServerMessage): void {
   try {
     ws.send(JSON.stringify(message));
@@ -164,17 +228,10 @@ export function liveWebSocket(c: Context): WSEvents {
 
           // Send product context as a user message (keeps system prompt injection-free)
           const contextData = message.context;
-          if (contextData && (contextData.product || contextData.results)) {
-            const contextParts: string[] = [];
-            if (contextData.product) {
-              contextParts.push(`Current product the user is viewing: ${JSON.stringify(contextData.product)}`);
-            }
-            if (contextData.results && Array.isArray(contextData.results) && contextData.results.length > 0) {
-              const top = contextData.results.slice(0, 5);
-              contextParts.push(`Top search results found:\n${JSON.stringify(top)}`);
-            }
+          if (contextData && (contextData.focusedProduct || contextData.currentProduct || contextData.results)) {
+            const contextText = buildVoiceContextTurnText(contextData);
             session.sendClientContent({
-              turns: [{ role: "user", parts: [{ text: contextParts.join("\n\n") }] }],
+              turns: [{ role: "user", parts: [{ text: contextText }] }],
               turnComplete: true,
             });
           }

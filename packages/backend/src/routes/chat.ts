@@ -19,6 +19,34 @@ const SYSTEM_INSTRUCTION = [
 
 export const chatRoute = new Hono();
 
+function buildQuotaReply(error: unknown): string {
+  const retrySeconds = extractRetrySeconds(error);
+  if (retrySeconds !== null) {
+    const roundedMinutes = Math.max(1, Math.ceil(retrySeconds / 60));
+    return `Chat quota reached. Please wait about ${roundedMinutes} minute${roundedMinutes === 1 ? "" : "s"} and try again.`;
+  }
+  return "Chat quota reached. Please wait a minute and try again.";
+}
+
+function extractRetrySeconds(error: unknown): number | null {
+  if (!error || typeof error !== "object") return null;
+  const details = (error as { details?: unknown }).details;
+  if (!Array.isArray(details)) return null;
+
+  for (const detail of details) {
+    if (!detail || typeof detail !== "object") continue;
+    const retryDelay = (detail as { retryDelay?: unknown }).retryDelay;
+    if (typeof retryDelay === "string") {
+      const match = retryDelay.match(/(\d+\.?\d*)/);
+      if (match) {
+        return Number(match[1]);
+      }
+    }
+  }
+
+  return null;
+}
+
 chatRoute.post("/", async (c) => {
   let body: ChatRequest;
   try {
@@ -69,6 +97,12 @@ chatRoute.post("/", async (c) => {
     return c.json<ChatResponse>({ reply });
   } catch (err) {
     console.error("[chat] Provider failure:", err);
+    if (typeof err === "object" && err !== null && "status" in err && (err as { status?: number }).status === 429) {
+      return c.json<ChatResponse>(
+        { reply: buildQuotaReply(err) },
+        429,
+      );
+    }
     return c.json<ChatResponse>(
       { reply: "Sorry, I'm having trouble responding right now. Please try again in a moment." },
       500,

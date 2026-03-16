@@ -11,6 +11,7 @@ import {
 import type {
   BackgroundToSidePanelMessage,
   ChatMessage,
+  ChatProductContext,
   ChatRequest,
   IdentifiedProduct,
   ProductDisplayInfo,
@@ -43,6 +44,17 @@ export interface ThemeOption {
   label: string;
   shellClassName: string;
   accentClassName: string;
+}
+
+export interface ChatFocusOption {
+  id: string;
+  kind: "current" | "result";
+  label: string;
+  subtitle: string;
+  imageUrl: string | null;
+  priceLabel: string;
+  productUrl: string | null;
+  product: ChatProductContext;
 }
 
 export interface SidepanelInitialState {
@@ -80,6 +92,8 @@ interface SidepanelStateValue {
   availableThemes: ThemeOption[];
   currentProduct: ProductDisplayInfo | null;
   currentResponse: SearchResponse | null;
+  chatFocusOptions: ChatFocusOption[];
+  selectedChatFocusId: string | null;
   phaseText: (phase: 1 | 2 | 3) => string;
   resetToEmpty: () => void;
   selectDetectedProduct: (product: IdentifiedProduct, tabId: number, screenshotDataUrl: string, pageUrl: string) => void;
@@ -96,6 +110,7 @@ interface SidepanelStateValue {
   addSavedLink: (ranked: RankedResult) => void;
   removeSavedLink: (id: string) => void;
   setSelectedThemeId: (id: string) => void;
+  setSelectedChatFocusId: (id: string) => void;
 }
 
 const themes: ThemeOption[] = [
@@ -188,6 +203,26 @@ function getRuntime(): RuntimeBridge | null {
   return chrome.runtime;
 }
 
+function toCurrentProductContext(product: ProductDisplayInfo): ChatProductContext {
+  return {
+    name: product.name,
+    price: product.price,
+    currency: product.currency,
+    marketplace: product.marketplace ?? null,
+    imageUrl: product.imageUrl ?? null,
+  };
+}
+
+function toResultProductContext(ranked: RankedResult): ChatProductContext {
+  return {
+    title: ranked.result.title,
+    price: ranked.result.price,
+    currency: ranked.result.currency,
+    marketplace: ranked.result.marketplace,
+    imageUrl: ranked.result.imageUrl,
+  };
+}
+
 export function SidepanelStateProvider({
   children,
   initialState,
@@ -201,6 +236,7 @@ export function SidepanelStateProvider({
   const [priceBarCollapsed, setPriceBarCollapsed] = useState(false);
   const [savedLinks, setSavedLinks] = useState<SavedLink[]>(initialState?.savedLinks ?? []);
   const [selectedThemeId, setSelectedThemeId] = useState(initialState?.selectedThemeId ?? defaultTheme.id);
+  const [selectedChatFocusId, setSelectedChatFocusId] = useState<string | null>("current");
   const settingsHydratedRef = useRef(false);
   const phaseTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   const currentTabIdRef = useRef<number | null>(initialState?.tabId ?? null);
@@ -382,11 +418,72 @@ export function SidepanelStateProvider({
     startPhaseTimers();
   }, [startPhaseTimers]);
 
+  const displayResults = viewState.view === "results" ? viewState.response.results : [];
+  const noPriceCount = viewState.view === "results"
+    ? viewState.response.results.filter((result) => !result.priceAvailable).length
+    : 0;
+  const selectedTheme = themes.find((theme) => theme.id === selectedThemeId) ?? defaultTheme;
+  const currentProduct =
+    viewState.view === "results" || viewState.view === "loading" || viewState.view === "error"
+      ? viewState.product
+      : null;
+  const currentResponse = viewState.view === "results" ? viewState.response : null;
+  const chatFocusOptions = useMemo<ChatFocusOption[]>(() => {
+    const options: ChatFocusOption[] = [];
+
+    if (currentProduct) {
+      options.push({
+        id: "current",
+        kind: "current",
+        label: currentProduct.name,
+        subtitle: "Original",
+        imageUrl: currentProduct.imageUrl ?? currentProduct.displayImageDataUrl ?? null,
+        priceLabel: currentProduct.price === null
+          ? "See price"
+          : toPriceLabel(currentProduct.price, currentProduct.currency),
+        productUrl: currentProduct.productUrl ?? null,
+        product: toCurrentProductContext(currentProduct),
+      });
+    }
+
+    options.push(...displayResults.map((ranked) => ({
+      id: ranked.result.id,
+      kind: "result" as const,
+      label: ranked.result.title,
+      subtitle: ranked.result.marketplace,
+      imageUrl: ranked.result.imageUrl,
+      priceLabel: toPriceLabel(ranked.result.price, ranked.result.currency),
+      productUrl: ranked.result.productUrl,
+      product: toResultProductContext(ranked),
+    })));
+
+    return options;
+  }, [currentProduct, displayResults]);
+
+  useEffect(() => {
+    if (chatFocusOptions.length === 0) {
+      if (selectedChatFocusId !== null) {
+        setSelectedChatFocusId(null);
+      }
+      return;
+    }
+
+    if (!selectedChatFocusId || !chatFocusOptions.some((option) => option.id === selectedChatFocusId)) {
+      setSelectedChatFocusId(chatFocusOptions[0].id);
+    }
+  }, [chatFocusOptions, selectedChatFocusId]);
+
+  const selectedChatFocus = useMemo(
+    () => chatFocusOptions.find((option) => option.id === selectedChatFocusId) ?? chatFocusOptions[0] ?? null,
+    [chatFocusOptions, selectedChatFocusId],
+  );
+
   const sendChatMessage = useCallback((text: string) => {
     if (viewState.view !== "results") return;
 
     const trimmed = text.trim();
     if (!trimmed) return;
+    const focusedProduct = selectedChatFocus?.product ?? null;
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
@@ -395,7 +492,7 @@ export function SidepanelStateProvider({
       inputMode: "text",
       timestamp: Date.now(),
       context: chatMessages.length === 0 ? {
-        currentProduct: viewState.product,
+        currentProduct: focusedProduct,
         searchResults: viewState.response.results,
       } : null,
     };
@@ -407,14 +504,14 @@ export function SidepanelStateProvider({
     const request: ChatRequest = {
       message: trimmed,
       context: {
-        product: viewState.product,
+        product: focusedProduct,
         results: viewState.response.results,
       },
       history: chatMessages,
     };
 
     getRuntime()?.sendMessage({ type: "CHAT_REQUEST", request, tabId: currentTabIdRef.current });
-  }, [chatMessages, viewState]);
+  }, [chatMessages, selectedChatFocus, viewState]);
 
   const addSavedLink = useCallback((ranked: RankedResult) => {
     setSavedLinks((links) => {
@@ -439,38 +536,98 @@ export function SidepanelStateProvider({
     setSavedLinks((links) => links.filter((link) => link.id !== id));
   }, []);
 
-  const displayResults = viewState.view === "results" ? viewState.response.results : [];
-  const noPriceCount = viewState.view === "results"
-    ? viewState.response.results.filter((result) => !result.priceAvailable).length
-    : 0;
-  const selectedTheme = themes.find((theme) => theme.id === selectedThemeId) ?? defaultTheme;
-  const currentProduct =
-    viewState.view === "results" || viewState.view === "loading" || viewState.view === "error"
-      ? viewState.product
-      : null;
-  const currentResponse = viewState.view === "results" ? viewState.response : null;
+  // Snapshot the focus/context at voice session start so mid-session focus
+  // changes don't cause committed turns to be attributed to the wrong product.
+  const voiceSessionContextRef = useRef<{
+    product: ChatProductContext | null;
+    results: RankedResult[];
+  } | null>(null);
+
+  const commitVoiceConversation = useCallback((turn: { inputTranscript: string; outputTranscript: string }) => {
+    const snapshot = voiceSessionContextRef.current;
+    setChatMessages((messages) => {
+      const nextMessages: ChatMessage[] = [];
+      const baseContext = messages.length === 0 && snapshot ? {
+        currentProduct: snapshot.product,
+        searchResults: snapshot.results,
+      } : null;
+      const baseTimestamp = Date.now();
+
+      if (turn.inputTranscript) {
+        nextMessages.push({
+          id: crypto.randomUUID(),
+          role: "user",
+          content: turn.inputTranscript,
+          inputMode: "voice",
+          timestamp: baseTimestamp,
+          context: baseContext,
+        });
+      }
+
+      if (turn.outputTranscript) {
+        nextMessages.push({
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: turn.outputTranscript,
+          inputMode: "voice",
+          timestamp: baseTimestamp + nextMessages.length,
+          context: null,
+        });
+      }
+
+      return nextMessages.length > 0 ? [...messages, ...nextMessages] : messages;
+    });
+  }, []);
 
   const voiceContext = useMemo(() => ({
-    product: currentProduct ? {
-      name: currentProduct.name,
-      price: currentProduct.price,
-      currency: currentProduct.currency,
-      marketplace: currentProduct.marketplace,
+    focusedProduct: selectedChatFocus ? {
+      ...selectedChatFocus.product,
+      label: selectedChatFocus.label,
+      subtitle: selectedChatFocus.subtitle,
+      productUrl: selectedChatFocus.productUrl,
     } : null,
+    currentProduct: currentProduct ? {
+      ...toCurrentProductContext(currentProduct),
+      label: currentProduct.name,
+      productUrl: currentProduct.productUrl ?? null,
+    } : null,
+    focusMode: selectedChatFocus?.kind ?? null,
+    guidance: "Answer about the focused item first unless the user explicitly asks to compare multiple options.",
     results: displayResults.slice(0, 5).map((r) => ({
+      rank: r.rank,
       title: r.result.title,
       price: r.result.price,
+      currency: r.result.currency,
       marketplace: r.result.marketplace,
+      productUrl: r.result.productUrl,
+      confidence: r.confidence,
     })),
-  }), [currentProduct, displayResults]);
+  }), [currentProduct, displayResults, selectedChatFocus]);
 
-  const voice = useVoice({ backendUrl: BACKEND_WS_URL, context: voiceContext });
+  const voice = useVoice({
+    backendUrl: BACKEND_WS_URL,
+    context: voiceContext,
+    onConversationCommit: commitVoiceConversation,
+  });
+
+  const wrappedStartVoice = useCallback(async () => {
+    voiceSessionContextRef.current = {
+      product: selectedChatFocus?.product ?? null,
+      results: currentResponse?.results ?? [],
+    };
+    await voice.start();
+  }, [voice.start, selectedChatFocus, currentResponse]);
+
+  const wrappedEndVoice = useCallback(() => {
+    voice.endSession();
+    voiceSessionContextRef.current = null;
+  }, [voice.endSession]);
 
   useEffect(() => {
     if (viewState.view !== "results") {
-      voice.endSession();
+      wrappedEndVoice();
     }
-  }, [viewState.view, voice.endSession]);
+  }, [viewState.view, wrappedEndVoice]);
 
   const value = useMemo<SidepanelStateValue>(() => ({
     viewState,
@@ -484,6 +641,8 @@ export function SidepanelStateProvider({
     availableThemes: themes,
     currentProduct,
     currentResponse,
+    chatFocusOptions,
+    selectedChatFocusId,
     phaseText: (phase: 1 | 2 | 3) => {
       switch (phase) {
         case 1:
@@ -501,18 +660,20 @@ export function SidepanelStateProvider({
     addSavedLink,
     removeSavedLink,
     setSelectedThemeId,
+    setSelectedChatFocusId,
     voiceStatus: voice.status,
     isVoiceRecording: voice.isRecording,
     voiceInputTranscript: voice.inputTranscript,
     voiceOutputTranscript: voice.outputTranscript,
     voiceError: voice.error,
-    startVoice: voice.start,
+    startVoice: wrappedStartVoice,
     pauseVoice: voice.pauseMic,
-    endVoiceSession: voice.endSession,
+    endVoiceSession: wrappedEndVoice,
   }), [
     addSavedLink,
     chatLoading,
     chatMessages,
+    chatFocusOptions,
     currentProduct,
     currentResponse,
     displayResults,
@@ -521,8 +682,10 @@ export function SidepanelStateProvider({
     removeSavedLink,
     resetToEmpty,
     savedLinks,
+    selectedChatFocusId,
     selectDetectedProduct,
     selectedTheme,
+    setSelectedChatFocusId,
     sendChatMessage,
     viewState,
     voice.status,
@@ -530,9 +693,9 @@ export function SidepanelStateProvider({
     voice.inputTranscript,
     voice.outputTranscript,
     voice.error,
-    voice.start,
+    wrappedStartVoice,
     voice.pauseMic,
-    voice.endSession,
+    wrappedEndVoice,
   ]);
 
   return (

@@ -10,6 +10,7 @@ export type VoiceStatus = "idle" | "connecting" | "recording" | "paused" | "erro
 export interface UseVoiceOptions {
   backendUrl: string;
   context: Record<string, unknown>;
+  onConversationCommit?: (turn: { inputTranscript: string; outputTranscript: string }) => void;
 }
 
 export interface UseVoiceReturn {
@@ -32,7 +33,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
   return btoa(binary);
 }
 
-function base64ToFloat32(base64: string): Float32Array<ArrayBuffer> {
+function base64ToFloat32(base64: string): Float32Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) {
@@ -48,7 +49,40 @@ function base64ToFloat32(base64: string): Float32Array<ArrayBuffer> {
   return float32;
 }
 
-export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceReturn {
+export function applyPlaybackEnvelope(samples: Float32Array, fadeSamples = 96): Float32Array {
+  if (samples.length === 0) return samples;
+
+  const output = new Float32Array(samples);
+  const fadeLength = Math.min(fadeSamples, Math.floor(output.length / 2));
+
+  for (let i = 0; i < output.length; i++) {
+    let gain = 1;
+    if (fadeLength > 0 && i < fadeLength) {
+      gain = Math.min(gain, i / fadeLength);
+    }
+    if (fadeLength > 0 && i >= output.length - fadeLength) {
+      gain = Math.min(gain, (output.length - 1 - i) / fadeLength);
+    }
+    output[i] *= Math.max(gain, 0);
+  }
+
+  let peak = 0;
+  for (let i = 0; i < output.length; i++) {
+    peak = Math.max(peak, Math.abs(output[i]));
+  }
+  if (peak > 0.92) {
+    const trim = 0.92 / peak;
+    for (let i = 0; i < output.length; i++) {
+      output[i] *= trim;
+    }
+  }
+
+  const normalized = new Float32Array(output.length);
+  normalized.set(output);
+  return normalized;
+}
+
+export function useVoice({ backendUrl, context, onConversationCommit }: UseVoiceOptions): UseVoiceReturn {
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [inputTranscript, setInputTranscript] = useState("");
   const [outputTranscript, setOutputTranscript] = useState("");
@@ -64,6 +98,22 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
   const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
   const cleaningUpRef = useRef(false);
   const turnCompleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputTranscriptRef = useRef("");
+  const outputTranscriptRef = useRef("");
+
+  const commitPendingConversation = useCallback(() => {
+    const nextInput = inputTranscriptRef.current.trim();
+    const nextOutput = outputTranscriptRef.current.trim();
+    if (!nextInput && !nextOutput) return;
+    onConversationCommit?.({
+      inputTranscript: nextInput,
+      outputTranscript: nextOutput,
+    });
+    inputTranscriptRef.current = "";
+    outputTranscriptRef.current = "";
+    setInputTranscript("");
+    setOutputTranscript("");
+  }, [onConversationCommit]);
 
   const stopCapture = useCallback(() => {
     workletNodeRef.current?.disconnect();
@@ -120,10 +170,10 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
       audioCtxPlaybackRef.current = new AudioContext({ sampleRate: VOICE_OUTPUT_SAMPLE_RATE });
     }
     const ctx = audioCtxPlaybackRef.current;
-    const float32 = base64ToFloat32(base64Data);
+    const float32 = applyPlaybackEnvelope(base64ToFloat32(base64Data));
 
     const audioBuffer = ctx.createBuffer(1, float32.length, VOICE_OUTPUT_SAMPLE_RATE);
-    audioBuffer.copyToChannel(float32, 0);
+    audioBuffer.copyToChannel(float32 as unknown as Float32Array<ArrayBuffer>, 0);
 
     const source = ctx.createBufferSource();
     source.buffer = audioBuffer;
@@ -234,10 +284,12 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
             playAudioChunk(msg.data);
             break;
           case "input_transcript":
-            setInputTranscript((prev) => prev + msg.content);
+            inputTranscriptRef.current += msg.content;
+            setInputTranscript(inputTranscriptRef.current);
             break;
           case "output_transcript":
-            setOutputTranscript((prev) => prev + msg.content);
+            outputTranscriptRef.current += msg.content;
+            setOutputTranscript(outputTranscriptRef.current);
             break;
           case "interrupted":
             clearPlaybackQueue();
@@ -246,8 +298,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
             if (turnCompleteTimerRef.current) clearTimeout(turnCompleteTimerRef.current);
             turnCompleteTimerRef.current = setTimeout(() => {
               turnCompleteTimerRef.current = null;
-              setInputTranscript("");
-              setOutputTranscript("");
+              commitPendingConversation();
             }, 200);
             break;
           case "go_away":
@@ -327,7 +378,7 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
       setStatus("error");
       cleanup();
     }
-  }, [backendUrl, cleanup, clearPlaybackQueue, ensureMicPermission, playAudioChunk, sendWs]);
+  }, [backendUrl, cleanup, clearPlaybackQueue, commitPendingConversation, ensureMicPermission, playAudioChunk, sendWs]);
 
   const pauseMic = useCallback(() => {
     const node = workletNodeRef.current;
@@ -350,11 +401,14 @@ export function useVoice({ backendUrl, context }: UseVoiceOptions): UseVoiceRetu
   }, [sendWs, stopCapture]);
 
   const endSession = useCallback(() => {
+    if (turnCompleteTimerRef.current) {
+      clearTimeout(turnCompleteTimerRef.current);
+      turnCompleteTimerRef.current = null;
+    }
+    commitPendingConversation();
     cleanup();
     setStatus("idle");
-    setInputTranscript("");
-    setOutputTranscript("");
-  }, [cleanup]);
+  }, [cleanup, commitPendingConversation]);
 
   return {
     status,

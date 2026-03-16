@@ -1,7 +1,10 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProductDisplayInfo, RankedResult, SearchResponse } from "@shopping-assistant/shared";
 import App from "../App";
+import { MockWebSocket } from "./MockWebSocket";
+
+vi.stubGlobal("WebSocket", MockWebSocket);
 
 const product: ProductDisplayInfo = {
   name: "Compact Leather Tote",
@@ -100,6 +103,30 @@ const response: SearchResponse = {
 };
 
 describe("chat page", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    MockWebSocket.instances = [];
+    Object.defineProperty(navigator, "permissions", {
+      value: {
+        query: vi.fn().mockResolvedValue({ state: "granted" }),
+      },
+      configurable: true,
+    });
+    Object.assign(chrome, {
+      tabs: {
+        create: vi.fn(),
+      },
+      runtime: {
+        ...chrome.runtime,
+        sendMessage: vi.fn(),
+      },
+    });
+  });
+
   it("shows a horizontal compact-results strip and a single dedicated composer", () => {
     render(
       <App
@@ -115,7 +142,7 @@ describe("chat page", () => {
     );
 
     expect(screen.getByTestId("chat-results-strip")).toHaveClass("overflow-x-auto");
-    expect(screen.getByText("Marketplace 4")).toBeInTheDocument();
+    expect(screen.getByText("Compact Leather Tote Variant 4")).toBeInTheDocument();
     expect(screen.getAllByRole("textbox")).toHaveLength(1);
     const voiceButton = screen.getByRole("button", { name: /voice chat/i });
     const sendButton = screen.getByRole("button", { name: /send message/i });
@@ -127,5 +154,169 @@ describe("chat page", () => {
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", code: "Enter" });
 
     expect(screen.getByText("How do these compare?")).toBeInTheDocument();
+  });
+
+  it("keeps completed voice turns in chat after the voice session is stopped", async () => {
+    render(
+      <App
+        initialPath="/chat"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+        }}
+      />,
+    );
+
+    await act(async () => {
+      const voiceButtons = screen.getAllByRole("button", { name: /voice chat/i });
+      fireEvent.click(voiceButtons[voiceButtons.length - 1]);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    const ws = MockWebSocket.instances[0];
+
+    act(() => {
+      ws.onmessage?.({ data: JSON.stringify({ type: "input_transcript", content: "Which one is the best value?" }) });
+      ws.onmessage?.({ data: JSON.stringify({ type: "output_transcript", content: "Marketplace 1 looks like the best value right now." }) });
+      ws.onmessage?.({ data: JSON.stringify({ type: "turn_complete" }) });
+    });
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+
+    // Toggle voice off by clicking the active voice button (pause), then again (stop)
+    const voiceButtons = screen.getAllByRole("button", { name: /voice chat/i });
+    fireEvent.click(voiceButtons[voiceButtons.length - 1]);
+    fireEvent.click(screen.getAllByRole("button", { name: /voice chat/i }).slice(-1)[0]);
+
+    expect(screen.getByText("Which one is the best value?")).toBeInTheDocument();
+    expect(screen.getByText("Marketplace 1 looks like the best value right now.")).toBeInTheDocument();
+  });
+
+  it("defaults chat focus to the current product and lets the user switch it from the result strip", () => {
+    render(
+      <App
+        initialPath="/chat"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+        }}
+      />,
+    );
+
+    const currentProductButton = screen.getByRole("button", { name: /^focus compact leather tote$/i });
+    const resultButton = screen.getByRole("button", { name: /^focus compact leather tote variant 2$/i });
+
+    expect(currentProductButton).toHaveAttribute("aria-pressed", "true");
+    expect(resultButton).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(resultButton);
+
+    expect(currentProductButton).toHaveAttribute("aria-pressed", "false");
+    expect(resultButton).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("uses the selected focused result in the chat request context", () => {
+    render(
+      <App
+        initialPath="/chat"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^focus compact leather tote variant 2$/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Tell me about this option" } });
+    fireEvent.click(screen.getByRole("button", { name: /send message/i }));
+
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: "CHAT_REQUEST",
+      request: expect.objectContaining({
+        message: "Tell me about this option",
+        context: expect.objectContaining({
+          product: expect.objectContaining({
+            title: "Compact Leather Tote Variant 2",
+            price: 80.99,
+            currency: "USD",
+            marketplace: "Marketplace 2",
+            imageUrl: "https://example.com/result.jpg",
+          }),
+          results,
+        }),
+      }),
+    }));
+  });
+
+  it("opens the product link from the chat strip without changing focus", () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    render(
+      <App
+        initialPath="/chat"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+        }}
+      />,
+    );
+
+    const resultButton = screen.getByRole("button", { name: /^focus compact leather tote variant 2$/i });
+    expect(resultButton).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: /^open compact leather tote variant 2$/i }));
+
+    expect(openSpy).toHaveBeenCalledWith("https://example.com/result-2", "_blank", "noopener");
+    expect(resultButton).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("starts voice with a focused-item context brief", async () => {
+    render(
+      <App
+        initialPath="/chat"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^focus compact leather tote variant 2$/i }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /voice chat/i }));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    const ws = MockWebSocket.instances[0];
+    const configCall = ws.send.mock.calls.find(([payload]) => JSON.parse(payload as string).type === "config");
+    const configMessage = JSON.parse(configCall?.[0] as string);
+
+    expect(configMessage.context.focusedProduct).toEqual(expect.objectContaining({
+      title: "Compact Leather Tote Variant 2",
+      marketplace: "Marketplace 2",
+      productUrl: "https://example.com/result-2",
+    }));
+    expect(configMessage.context.currentProduct).toEqual(expect.objectContaining({
+      name: "Compact Leather Tote",
+    }));
+    expect(configMessage.context.guidance).toMatch(/focused item/i);
   });
 });
