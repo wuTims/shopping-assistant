@@ -19,6 +19,7 @@ let activeTabId: number | null = null;
 
 /** Message types that represent a view state worth restoring on panel reopen */
 const VIEW_STATE_TYPES = new Set([
+  "empty",
   "identifying",
   "product_selection",
   "searching",
@@ -26,73 +27,24 @@ const VIEW_STATE_TYPES = new Set([
   "error",
 ]);
 
-// Open side panel and trigger screenshot on extension icon click
+async function ensureContentScript(tabId: number): Promise<void> {
+  const scriptFiles = chrome.runtime.getManifest().content_scripts?.[0]?.js ?? [];
+  if (scriptFiles.length === 0) return;
+
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: scriptFiles,
+  });
+}
+
+// Open side panel and put the current tab into selection mode on extension icon click
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab.id) return;
   activeTabId = tab.id;
 
+  await ensureContentScript(tab.id);
   await chrome.sidePanel.open({ tabId: tab.id });
-
-  try {
-    notifySidePanel(tab.id, { type: "identifying" });
-
-    const screenshotDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, {
-      format: "png",
-    });
-
-    const identifyRes = await fetch(`${BACKEND_URL}/identify`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        screenshot: screenshotDataUrl,
-        pageUrl: tab.url ?? "",
-      }),
-    });
-
-    if (!identifyRes.ok) {
-      notifySidePanel(tab.id, {
-        type: "error",
-        product: null,
-        message: "Failed to identify products on this page.",
-      });
-      return;
-    }
-
-    const identified: IdentifyResponse = await identifyRes.json();
-
-    if (identified.products.length === 0) {
-      notifySidePanel(tab.id, {
-        type: "error",
-        product: null,
-        message: "No products found on this page.",
-      });
-      return;
-    }
-
-    if (identified.products.length === 1 || identified.pageType === "product_detail") {
-      const product = identified.products[0];
-      const displayProduct = identifiedToDisplay(product);
-      notifySidePanel(tab.id, { type: "searching", product: displayProduct });
-      await searchForProduct(tab.id, displayProduct, screenshotDataUrl, tab.url ?? "");
-    } else {
-      notifySidePanel(tab.id, {
-        type: "product_selection",
-        products: identified.products,
-        screenshotDataUrl,
-        pageUrl: tab.url ?? "",
-        tabId: tab.id,
-      });
-    }
-  } catch (err) {
-    console.error("[Shopping Assistant] Screenshot flow failed:", err);
-    if (tab.id) {
-      notifySidePanel(tab.id, {
-        type: "error",
-        product: null,
-        message: "Something went wrong. Please try again.",
-      });
-    }
-  }
+  notifySidePanel(tab.id, { type: "empty" });
 });
 
 // Listen for messages from side panel and content script

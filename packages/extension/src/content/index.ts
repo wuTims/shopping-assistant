@@ -1,5 +1,6 @@
 import { initOverlays } from "./overlay";
 
-console.log("[Shopping Assistant] Content script loaded");
-
-initOverlays();
+export function onExecute() {
+  console.log("[Shopping Assistant] Content script loaded");
+  initOverlays();
+}

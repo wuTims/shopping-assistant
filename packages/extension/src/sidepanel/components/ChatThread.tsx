@@ -5,9 +5,10 @@ interface Props {
   messages: ChatMessage[];
   onSendMessage: (message: string) => void;
   isLoading: boolean;
+  showComposer?: boolean;
 }
 
-export function ChatThread({ messages, onSendMessage, isLoading }: Props) {
+export function ChatThread({ messages, onSendMessage, isLoading, showComposer = true }: Props) {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -82,37 +83,38 @@ export function ChatThread({ messages, onSendMessage, isLoading }: Props) {
         )}
       </div>
 
-      {/* Input bar */}
-      <div className="px-3 py-2.5 border-t border-gray-100 bg-background">
-        <div className="flex items-center gap-2">
-          <input
-            ref={inputRef}
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && handleSubmit()}
-            placeholder="Ask about these..."
-            className="flex-1 bg-white border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-text-main placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
-            disabled={isLoading}
-          />
-          {input.trim() ? (
-            <button
-              onClick={handleSubmit}
+      {showComposer && (
+        <div className="px-3 py-2.5 border-t border-gray-100 bg-background">
+          <div className="flex items-center gap-2">
+            <input
+              ref={inputRef}
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !e.nativeEvent.isComposing && handleSubmit()}
+              placeholder="Ask about these..."
+              className="flex-1 bg-white border border-gray-200 rounded-xl px-3.5 py-2.5 text-sm text-text-main placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
               disabled={isLoading}
-              className="w-10 h-10 flex items-center justify-center rounded-xl bg-primary text-white hover:bg-primary-dark transition-colors disabled:opacity-50"
-            >
-              <span className="material-icons text-lg">send</span>
-            </button>
-          ) : (
-            <button
-              onClick={handleMicClick}
-              className="w-10 h-10 flex items-center justify-center rounded-xl bg-gray-100 text-text-muted hover:bg-gray-200 transition-colors"
-            >
-              <span className="material-icons text-lg">mic</span>
-            </button>
-          )}
+            />
+            {input.trim() ? (
+              <button
+                onClick={handleSubmit}
+                disabled={isLoading}
+                className="w-10 h-10 flex items-center justify-center rounded-xl bg-primary text-white hover:bg-primary-dark transition-colors disabled:opacity-50"
+              >
+                <span className="material-icons text-lg">send</span>
+              </button>
+            ) : (
+              <button
+                onClick={handleMicClick}
+                className="w-10 h-10 flex items-center justify-center rounded-xl bg-gray-100 text-text-muted hover:bg-gray-200 transition-colors"
+              >
+                <span className="material-icons text-lg">mic</span>
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
