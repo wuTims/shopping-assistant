@@ -75,6 +75,13 @@ identify.post("/", async (c) => {
     console.log(
       `[identify] Found ${response.products.length} products (${response.pageType}) in ${Date.now() - start}ms`,
     );
+    for (const p of response.products) {
+      console.log(
+        `[identify]   "${p.name}" price=${p.price !== null ? `${p.currency ?? ""}${p.price}` : "N/A"} ` +
+        `bbox=${p.boundingBox ? `${p.boundingBox.width}x${p.boundingBox.height}` : "none"} ` +
+        `crop=${p.imageRegion ? "yes" : "no"}`,
+      );
+    }
 
     return c.json(response);
   } catch (err) {

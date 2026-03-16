@@ -91,7 +91,7 @@ export async function identifyFromScreenshot(
 
 For each product, extract:
 - name: the product name/title
-- price: the displayed price as a number (null if not visible)
+- price: the CURRENT selling price as a number. If multiple prices are shown (e.g. a strikethrough original price and a sale price), always use the LOWEST/SALE price that the customer would actually pay. Ignore "was" prices, "list" prices, or crossed-out prices. Return null only if no price is visible at all.
 - currency: the currency code (USD, GBP, EUR, CNY, etc.) or null
 - boundingBox: approximate pixel coordinates {x, y, width, height} of the product in the image, or null if unclear
 
