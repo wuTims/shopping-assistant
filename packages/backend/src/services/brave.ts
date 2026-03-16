@@ -15,6 +15,27 @@ function isShoppingDomain(url: string): boolean {
   return isKnownMarketplaceDomain(url);
 }
 
+const GENERIC_LISTING_PATH_PATTERNS = [
+  /^\/search(?:\/|$)/i,
+  /^\/browse(?:\/|$)/i,
+  /^\/c(?:\/|$)/i,
+  /^\/b(?:\/|$)/i,
+  /^\/shop(?:\/|$)/i,
+  /^\/collections?(?:\/|$)/i,
+  /^\/category(?:\/|$)/i,
+];
+
+const PRODUCT_DETAIL_PATH_PATTERNS: Array<{ host: RegExp; path: RegExp }> = [
+  { host: /(^|\.)walmart\.com$/i, path: /^\/ip(?:\/|$)/i },
+  { host: /(^|\.)amazon\./i, path: /^\/(?:dp|gp\/product)(?:\/|$)/i },
+  { host: /(^|\.)ebay\./i, path: /^\/itm(?:\/|$)/i },
+  { host: /(^|\.)target\.com$/i, path: /^\/p\/(?:-|$)/i },
+  { host: /(^|\.)bestbuy\.com$/i, path: /^\/site\/(?:-|$)/i },
+  { host: /(^|\.)homedepot\.com$/i, path: /^\/p\/(?:-|$)/i },
+  { host: /(^|\.)lowes\.com$/i, path: /^\/pd\/(?:-|$)/i },
+  { host: /(^|\.)etsy\.com$/i, path: /^\/listing\/(?:-|$)/i },
+];
+
 interface BraveWebResult {
   title: string;
   url: string;
@@ -88,7 +109,7 @@ export async function searchProducts(queries: string[]): Promise<ProviderSearchO
         // represented by product_cluster entries (which have structured prices and direct URLs).
         // The parent URL for clustered results is typically a search/category page with no price.
         const isShoppingSite = isShoppingDomain(item.url);
-        if (!item.product_cluster?.length && isShoppingSite) {
+        if (!item.product_cluster?.length && isShoppingSite && isLikelyProductDetailUrl(item.url)) {
           const parsed = parsePriceFromSnippets(item);
           queryResults.push({
             id: `brave_${idCounter++}`,
@@ -164,6 +185,28 @@ export function parsePrice(raw: string | null): { price: number | null; currency
   }
 
   return { price: null, currency: null };
+}
+
+export function isLikelyProductDetailUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.replace(/^www\./i, "");
+    const pathname = parsed.pathname.replace(/\/+$/, "") || "/";
+
+    for (const { host, path } of PRODUCT_DETAIL_PATH_PATTERNS) {
+      if (host.test(hostname)) {
+        return path.test(pathname);
+      }
+    }
+
+    if (parsed.searchParams.has("q") || parsed.searchParams.has("query")) {
+      return false;
+    }
+
+    return !GENERIC_LISTING_PATH_PATTERNS.some((pattern) => pattern.test(pathname));
+  } catch {
+    return false;
+  }
 }
 
 function parsePriceFromSnippets(item: BraveWebResult): { price: number | null; currency: string | null } {
