@@ -572,13 +572,29 @@ export function SidepanelStateProvider({
   }, [currentResponse, selectedChatFocus]);
 
   const voiceContext = useMemo(() => ({
-    product: selectedChatFocus?.product ?? null,
+    focusedProduct: selectedChatFocus ? {
+      ...selectedChatFocus.product,
+      label: selectedChatFocus.label,
+      subtitle: selectedChatFocus.subtitle,
+      productUrl: selectedChatFocus.productUrl,
+    } : null,
+    currentProduct: currentProduct ? {
+      ...toCurrentProductContext(currentProduct),
+      label: currentProduct.name,
+      productUrl: currentProduct.productUrl ?? null,
+    } : null,
+    focusMode: selectedChatFocus?.kind ?? null,
+    guidance: "Answer about the focused item first unless the user explicitly asks to compare multiple options.",
     results: displayResults.slice(0, 5).map((r) => ({
+      rank: r.rank,
       title: r.result.title,
       price: r.result.price,
+      currency: r.result.currency,
       marketplace: r.result.marketplace,
+      productUrl: r.result.productUrl,
+      confidence: r.confidence,
     })),
-  }), [displayResults, selectedChatFocus]);
+  }), [currentProduct, displayResults, selectedChatFocus]);
 
   const voice = useVoice({
     backendUrl: BACKEND_WS_URL,

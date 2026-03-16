@@ -309,4 +309,40 @@ describe("chat page", () => {
     expect(openSpy).toHaveBeenCalledWith("https://example.com/result-2", "_blank", "noopener");
     expect(resultButton).toHaveAttribute("aria-pressed", "false");
   });
+
+  it("starts voice with a focused-item context brief", async () => {
+    render(
+      <App
+        initialPath="/chat"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^focus compact leather tote variant 2$/i }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /voice chat/i }));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+
+    const ws = MockWebSocket.instances[0];
+    const configCall = ws.send.mock.calls.find(([payload]) => JSON.parse(payload as string).type === "config");
+    const configMessage = JSON.parse(configCall?.[0] as string);
+
+    expect(configMessage.context.focusedProduct).toEqual(expect.objectContaining({
+      title: "Compact Leather Tote Variant 2",
+      marketplace: "Marketplace 2",
+      productUrl: "https://example.com/result-2",
+    }));
+    expect(configMessage.context.currentProduct).toEqual(expect.objectContaining({
+      name: "Compact Leather Tote",
+    }));
+    expect(configMessage.context.guidance).toMatch(/focused item/i);
+  });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useVoice } from "../hooks/useVoice";
+import { applyPlaybackEnvelope, useVoice } from "../hooks/useVoice";
 
 // WebSocket mock (not provided by setup.ts)
 class MockWebSocket {
@@ -192,5 +192,17 @@ describe("useVoice", () => {
     unmount();
 
     expect(ws.readyState).toBe(MockWebSocket.CLOSED);
+  });
+
+  it("softens playback chunk edges without adding buffering", () => {
+    const input = new Float32Array(16).fill(1);
+    const output = applyPlaybackEnvelope(input, 4);
+
+    expect(output[0]).toBeLessThan(1);
+    expect(output[1]).toBeLessThan(1);
+    expect(output[7]).toBeGreaterThan(0.8);
+    expect(output[7]).toBeLessThan(0.93);
+    expect(output[14]).toBeLessThan(1);
+    expect(output[15]).toBeLessThan(1);
   });
 });
