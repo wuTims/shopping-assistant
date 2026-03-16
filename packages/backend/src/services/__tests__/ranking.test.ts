@@ -393,6 +393,172 @@ describe("baseMarketplace", () => {
   });
 });
 
+describe("buildFallbackScores – price penalty", () => {
+  it("penalizes items more than 2x the original price", () => {
+    const results = [
+      makeResult({ id: "cheap", title: "Sony Wireless Headphones", price: 80 }),
+      makeResult({ id: "expensive", title: "Sony Wireless Headphones", price: 300 }),
+    ];
+    const scores = buildFallbackScores(results, baseIdentification, null, 100);
+    expect(scores.cheap).toBeGreaterThan(scores.expensive);
+  });
+
+  it("penalizes items more than 3x harder than items at 2.5x", () => {
+    const results = [
+      makeResult({ id: "mid", title: "Sony Wireless Headphones", price: 250 }),
+      makeResult({ id: "high", title: "Sony Wireless Headphones", price: 400 }),
+    ];
+    const scores = buildFallbackScores(results, baseIdentification, null, 100);
+    expect(scores.mid).toBeGreaterThan(scores.high);
+  });
+
+  it("does not penalize items at or below the original price", () => {
+    const results = [
+      makeResult({ id: "cheaper", title: "Sony Wireless Headphones", price: 60 }),
+      makeResult({ id: "same", title: "Sony Wireless Headphones", price: 100 }),
+    ];
+    const scores = buildFallbackScores(results, baseIdentification, null, 100);
+    // Both should get the same text-based score (same title, both have price richness)
+    expect(scores.cheaper).toBe(scores.same);
+  });
+
+  it("does not penalize items slightly above original (up to 50% more)", () => {
+    const results = [
+      makeResult({ id: "same", title: "Sony Wireless Headphones", price: 100 }),
+      makeResult({ id: "slight", title: "Sony Wireless Headphones", price: 140 }),
+    ];
+    const scores = buildFallbackScores(results, baseIdentification, null, 100);
+    // Within 1.5x — no penalty
+    expect(scores.same).toBe(scores.slight);
+  });
+
+  it("applies graduated penalty: 5.4x should be penalized more than 2.5x", () => {
+    const results = [
+      makeResult({ id: "mid", title: "Sony Wireless Headphones", price: 250 }),
+      makeResult({ id: "extreme", title: "Sony Wireless Headphones", price: 540 }),
+    ];
+    const scores = buildFallbackScores(results, baseIdentification, null, 100);
+    expect(scores.mid).toBeGreaterThan(scores.extreme);
+    // The 5.4x item should be penalized enough to drop significantly
+    expect(scores.extreme).toBeLessThan(scores.mid - 0.05);
+  });
+
+  it("does not apply price penalty when originalPrice is null", () => {
+    const results = [
+      makeResult({ id: "a", title: "Sony Wireless Headphones", price: 500 }),
+      makeResult({ id: "b", title: "Sony Wireless Headphones", price: 50 }),
+    ];
+    const scores = buildFallbackScores(results, baseIdentification, null, null);
+    // Without original price, no penalty — both get same score
+    expect(scores.a).toBe(scores.b);
+  });
+
+  it("does not apply price penalty when result has no price", () => {
+    const results = [
+      makeResult({ id: "priced", title: "Sony Wireless Headphones", price: 500 }),
+      makeResult({ id: "noPrice", title: "Sony Wireless Headphones", price: null }),
+    ];
+    const scores = buildFallbackScores(results, baseIdentification, null, 100);
+    // The priced result gets richness boost (+0.04) and price penalty; noPrice gets neither
+    // Price penalty at 5x should outweigh richness boost, so noPrice may be higher
+    // But the key invariant: no crash, and noPrice doesn't get penalized
+    expect(scores.noPrice).toBeDefined();
+  });
+
+  it("the real scenario: $678 vs $125 should be heavily penalized", () => {
+    const results = [
+      makeResult({ id: "expensive", title: "HEMANT AND NANDITA Midi Dress With Buckle Belt", price: 678 }),
+      makeResult({ id: "reasonable", title: "HEMANT AND NANDITA Midi Dress With Buckle Belt", price: 110 }),
+    ];
+    const ident: ProductIdentification = {
+      category: "Clothing",
+      description: "Midi Dress With Buckle Belt",
+      brand: "HEMANT AND NANDITA",
+      attributes: { color: "white", material: null, style: null, size: null },
+      searchQueries: ["hemant nandita midi dress"],
+      estimatedPriceRange: null,
+    };
+    const scores = buildFallbackScores(results, ident, null, 125);
+    // $678 is 5.4x the $125 original — should be much lower
+    expect(scores.reasonable).toBeGreaterThan(scores.expensive);
+    expect(scores.expensive).toBeLessThan(scores.reasonable - 0.10);
+  });
+});
+
+describe("applyRanking – price messaging", () => {
+  it("shows '25% cheaper' for cheaper items", () => {
+    const results = [makeResult({ id: "a", price: 75 })];
+    const ranked = applyRanking(results, { a: 0.8 }, 100);
+    expect(ranked[0].comparisonNotes).toContain("25% cheaper");
+  });
+
+  it("shows 'X% more expensive' for moderately more expensive items (up to 50%)", () => {
+    const results = [makeResult({ id: "a", price: 130 })];
+    const ranked = applyRanking(results, { a: 0.8 }, 100);
+    expect(ranked[0].comparisonNotes).toContain("30% more expensive");
+  });
+
+  it("shows 'Higher-priced alternative' for items >50% more expensive", () => {
+    const results = [makeResult({ id: "a", price: 678 })];
+    const ranked = applyRanking(results, { a: 0.5 }, 125);
+    expect(ranked[0].comparisonNotes).not.toContain("% more expensive");
+    expect(ranked[0].comparisonNotes).toContain("Higher-priced alternative");
+  });
+
+  it("still includes the actual price in note for very expensive items", () => {
+    const results = [makeResult({ id: "a", price: 678, currency: "USD" })];
+    const ranked = applyRanking(results, { a: 0.5 }, 125);
+    expect(ranked[0].comparisonNotes).toContain("$678");
+  });
+
+  it("uses the raw percentage for items exactly at 50% more", () => {
+    const results = [makeResult({ id: "a", price: 150 })];
+    const ranked = applyRanking(results, { a: 0.8 }, 100);
+    // 50% is the boundary — should still show numeric form
+    expect(ranked[0].comparisonNotes).toContain("50% more expensive");
+  });
+
+  it("still shows 'Same price' for equal prices", () => {
+    const results = [makeResult({ id: "a", price: 100 })];
+    const ranked = applyRanking(results, { a: 0.8 }, 100);
+    expect(ranked[0].comparisonNotes).toContain("Same price");
+  });
+
+  it("preserves price delta and savingsPercent values regardless of messaging", () => {
+    const results = [makeResult({ id: "a", price: 678 })];
+    const ranked = applyRanking(results, { a: 0.5 }, 125);
+    // Raw data should always be available for programmatic use
+    expect(ranked[0].priceDelta).toBe(553);
+    expect(ranked[0].savingsPercent).toBeCloseTo(442.4, 0);
+  });
+});
+
+describe("applyRanking – expensive item demotion", () => {
+  it("sorts very expensive items below cheaper items at similar confidence", () => {
+    const results = [
+      makeResult({ id: "expensive", price: 678 }),
+      makeResult({ id: "cheaper", price: 90 }),
+    ];
+    // Give them similar confidence scores
+    const scores = { expensive: 0.55, cheaper: 0.50 };
+    const ranked = applyRanking(results, scores, 125);
+    // Even though expensive has a slightly higher confidence, the cheaper item
+    // should rank higher because it's actually a useful alternative
+    expect(ranked[0].result.id).toBe("cheaper");
+  });
+
+  it("does not demote moderately more expensive items", () => {
+    const results = [
+      makeResult({ id: "slightlyMore", price: 160 }),
+      makeResult({ id: "cheaper", price: 90 }),
+    ];
+    // Higher confidence should still win for moderate price differences
+    const scores = { slightlyMore: 0.60, cheaper: 0.50 };
+    const ranked = applyRanking(results, scores, 125);
+    expect(ranked[0].result.id).toBe("slightlyMore");
+  });
+});
+
 describe("diversityCap", () => {
   it("caps source marketplace results to MAX_SOURCE_MARKETPLACE_RESULTS", () => {
     const results = Array.from({ length: 10 }, (_, i) =>

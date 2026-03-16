@@ -18,11 +18,21 @@ function isShoppingDomain(url: string): boolean {
 const GENERIC_LISTING_PATH_PATTERNS = [
   /^\/search(?:\/|$)/i,
   /^\/browse(?:\/|$)/i,
+  /^\/s(?:\/|$)/i, // Amazon, Target search results
   /^\/c(?:\/|$)/i,
   /^\/b(?:\/|$)/i,
   /^\/shop(?:\/|$)/i,
   /^\/collections?(?:\/|$)/i,
   /^\/category(?:\/|$)/i,
+  /^\/market(?:\/|$)/i, // Etsy market/browse pages
+  /^\/brands?(?:\/|$)/i, // Nordstrom brand listing pages
+  /^\/wholesale(?:\/|$)/i, // DHgate wholesale listing pages
+  /^\/sch(?:\/|$)/i, // eBay search results
+  /^\/sr(?:\/|$)/i, // Nordstrom search results
+  /^\/cp(?:\/|$)/i, // Walmart category/content pages
+  /^\/deals(?:\/|$)/i, // Generic deals listing pages
+  /^\/designer(?:\/|$)/i, // Lyst designer/brand pages
+  /^\/w\/wholesale/i, // AliExpress wholesale search
 ];
 
 const PRODUCT_DETAIL_PATH_PATTERNS: Array<{ host: RegExp; path: RegExp }> = [
@@ -35,6 +45,12 @@ const PRODUCT_DETAIL_PATH_PATTERNS: Array<{ host: RegExp; path: RegExp }> = [
   { host: /(^|\.)lowes\.com$/i, path: /^\/pd\/(?:-|$)/i },
   { host: /(^|\.)etsy\.com$/i, path: /^\/listing\/\d+/i },
   { host: /(^|\.)aliexpress\.com$/i, path: /^\/item\/(?:-|$|[\w-]+\.html)/i },
+  { host: /(^|\.)nordstrom\.com$/i, path: /^\/s\/[^/]+\/\d+/i },
+  { host: /(^|\.)poshmark\.com$/i, path: /^\/listing\//i },
+  { host: /(^|\.)mercari\.com$/i, path: /^(?:\/us)?\/item\//i },
+  { host: /(^|\.)depop\.com$/i, path: /^\/products\//i },
+  { host: /(^|\.)dhgate\.com$/i, path: /^\/product\//i },
+  { host: /(^|\.)macys\.com$/i, path: /^\/shop\/product\//i },
 ];
 
 interface BraveWebResult {
@@ -56,8 +72,6 @@ interface BraveSearchResponse {
 }
 
 export async function searchProducts(queries: string[]): Promise<ProviderSearchOutcome> {
-  let idCounter = 0;
-
   const outcomes = await Promise.allSettled(
     queries.map(async (query) => {
       const url = new URL(BRAVE_API_URL);
@@ -91,7 +105,7 @@ export async function searchProducts(queries: string[]): Promise<ProviderSearchO
             if (!product.url) continue;
             const parsed = parsePrice(product.price ?? null);
             queryResults.push({
-              id: `brave_${idCounter++}`,
+              id: `brave_${randomUUID().slice(0, 8)}`,
               source: "brave",
               title: product.name ?? item.title,
               price: parsed.price,
@@ -114,7 +128,7 @@ export async function searchProducts(queries: string[]): Promise<ProviderSearchO
         if (!item.product_cluster?.length && isShoppingSite && isLikelyProductDetailUrl(item.url)) {
           const parsed = parsePriceFromSnippets(item);
           queryResults.push({
-            id: `brave_${idCounter++}`,
+            id: `brave_${randomUUID().slice(0, 8)}`,
             source: "brave",
             title: item.title,
             price: parsed.price,
@@ -202,7 +216,8 @@ export function isLikelyProductDetailUrl(url: string): boolean {
       }
     }
 
-    if (parsed.searchParams.has("q") || parsed.searchParams.has("query")) {
+    const searchParams = ["q", "query", "k", "searchTerm", "_nkw", "SearchText", "search_key"];
+    if (searchParams.some((p) => parsed.searchParams.has(p))) {
       return false;
     }
 
