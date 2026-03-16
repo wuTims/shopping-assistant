@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { extractPriceFromHtml, fetchAndExtractPrice } from "../price-extractor.js";
+import { extractPriceFromHtml, fetchAndExtractPrice, detectStaleContent } from "../price-extractor.js";
 
 describe("extractPriceFromHtml", () => {
   describe("JSON-LD extraction", () => {
@@ -112,6 +112,47 @@ describe("extractPriceFromHtml", () => {
     });
   });
 
+  describe("embedded script data extraction", () => {
+    it("extracts price from __NEXT_DATA__ with priceString (Walmart pattern)", () => {
+      const html = `<html><head>
+        <script id="__NEXT_DATA__" type="application/json">
+        {"props":{"pageProps":{"initialData":{"data":{"product":{"priceInfo":{"currentPrice":{"price":11.49,"priceString":"$11.49"},"priceCurrency":"USD"}}}}}}}
+        </script>
+        </head><body></body></html>`;
+      expect(extractPriceFromHtml(html)).toEqual({ price: 11.49, currency: "USD" });
+    });
+
+    it("extracts price from __NEXT_DATA__ with currentPrice nested object", () => {
+      const html = `<html><head>
+        <script id="__NEXT_DATA__" type="application/json">
+        {"props":{"pageProps":{"product":{"pricing":{"currentPrice":{"price":949.04},"currencyCode":"USD"}}}}}
+        </script>
+        </head><body></body></html>`;
+      expect(extractPriceFromHtml(html)).toEqual({ price: 949.04, currency: "USD" });
+    });
+
+    it("extracts price from __NEXT_DATA__ with salePrice flat field", () => {
+      const html = `<html><head>
+        <script id="__NEXT_DATA__" type="application/json">
+        {"props":{"product":{"salePrice":24.99,"currency":"EUR"}}}
+        </script>
+        </head><body></body></html>`;
+      expect(extractPriceFromHtml(html)).toEqual({ price: 24.99, currency: "EUR" });
+    });
+
+    it("prefers JSON-LD over embedded script data", () => {
+      const html = `<html><head>
+        <script type="application/ld+json">
+        {"@type":"Product","offers":{"price":"29.99","priceCurrency":"USD"}}
+        </script>
+        <script id="__NEXT_DATA__" type="application/json">
+        {"props":{"product":{"salePrice":19.99}}}
+        </script>
+        </head><body></body></html>`;
+      expect(extractPriceFromHtml(html)).toEqual({ price: 29.99, currency: "USD" });
+    });
+  });
+
   describe("regex fallback", () => {
     it("extracts price from visible text with dollar sign", () => {
       const html = `<html><body><span class="price">$34.99</span></body></html>`;
@@ -169,6 +210,7 @@ describe("fetchAndExtractPrice", () => {
   it("extracts price from fetched HTML with JSON-LD", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
+      status: 200,
       text: () => Promise.resolve(`<html><head>
         <script type="application/ld+json">
         {"@type":"Product","offers":{"price":"49.99","priceCurrency":"USD"}}
@@ -176,18 +218,103 @@ describe("fetchAndExtractPrice", () => {
     });
 
     const result = await fetchAndExtractPrice("https://example.com/product");
-    expect(result).toEqual({ price: 49.99, currency: "USD" });
+    expect(result).toEqual({ price: 49.99, currency: "USD", httpStatus: 200 });
   });
 
-  it("returns null for non-ok response", async () => {
+  it("returns null with httpStatus for non-ok response", async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 403 });
     const result = await fetchAndExtractPrice("https://example.com/blocked");
-    expect(result).toEqual({ price: null, currency: null });
+    expect(result).toEqual({ price: null, currency: null, httpStatus: 403 });
   });
 
-  it("returns null on fetch error", async () => {
+  it("returns 404 httpStatus for dead links", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 404 });
+    const result = await fetchAndExtractPrice("https://example.com/removed");
+    expect(result).toEqual({ price: null, currency: null, httpStatus: 404 });
+  });
+
+  it("returns null httpStatus on fetch error", async () => {
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("network error"));
     const result = await fetchAndExtractPrice("https://example.com/down");
-    expect(result).toEqual({ price: null, currency: null });
+    expect(result).toEqual({ price: null, currency: null, httpStatus: null });
+  });
+
+  it("detects stale product page (Macy's unavailable)", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(`<html><body>
+        <h1>Siena Women's Floral Print Sleeveless High-Low Maxi Dress</h1>
+        <div class="message">Sorry, this item is currently unavailable.</div>
+      </body></html>`),
+    });
+    const result = await fetchAndExtractPrice("https://www.macys.com/shop/product/test?ID=123");
+    expect(result.stale).toBe(true);
+    expect(result.price).toBeNull();
+  });
+
+  it("detects stale product page (Zappos out of stock)", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(`<html><body>
+        <h1>Oops! That's out of stock.</h1>
+        <p>Browse styles inspired by your search below!</p>
+      </body></html>`),
+    });
+    const result = await fetchAndExtractPrice("https://www.zappos.com/p/test-dress");
+    expect(result.stale).toBe(true);
+  });
+
+  it("detects stale product page (DHGate unavailable)", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(`<html><body>
+        <div>Currently unavailable. Highly Related Products Here</div>
+      </body></html>`),
+    });
+    const result = await fetchAndExtractPrice("https://www.dhgate.com/product/test/123.html");
+    expect(result.stale).toBe(true);
+  });
+
+  it("detects stale product page (Etsy item and shop unavailable)", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(`<html><body>
+        <div>Sorry, this item and shop are currently unavailable</div>
+      </body></html>`),
+    });
+    const result = await fetchAndExtractPrice("https://www.etsy.com/listing/4393338219/");
+    expect(result.stale).toBe(true);
+    expect(result.price).toBeNull();
+  });
+
+  it("detects stale product page (Lowes no longer sold)", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(`<html><body>
+        <p>This item is no longer sold on Lowes.com</p>
+      </body></html>`),
+    });
+    const result = await fetchAndExtractPrice("https://www.lowes.com/pd/Champion-Power-Equipment/1000728080");
+    expect(result.stale).toBe(true);
+    expect(result.price).toBeNull();
+  });
+
+  it("does not flag live product pages as stale", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: () => Promise.resolve(`<html><head>
+        <script type="application/ld+json">
+        {"@type":"Product","offers":{"price":"49.99","priceCurrency":"USD"}}
+        </script></head><body><h1>Great Dress</h1></body></html>`),
+    });
+    const result = await fetchAndExtractPrice("https://example.com/product");
+    expect(result.stale).toBeUndefined();
+    expect(result.price).toBe(49.99);
   });
 });
