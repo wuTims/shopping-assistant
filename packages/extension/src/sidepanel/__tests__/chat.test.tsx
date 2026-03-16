@@ -2,34 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProductDisplayInfo, RankedResult, SearchResponse } from "@shopping-assistant/shared";
 import App from "../App";
-
-class MockWebSocket {
-  static OPEN = 1;
-  static CLOSED = 3;
-  static instances: MockWebSocket[] = [];
-  readyState = MockWebSocket.OPEN;
-  onopen: (() => void) | null = null;
-  onmessage: ((evt: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
-  onerror: ((evt: unknown) => void) | null = null;
-  send = vi.fn((payload: string) => {
-    const message = JSON.parse(payload) as { type?: string };
-    if (message.type === "config") {
-      setTimeout(() => {
-        this.onmessage?.({ data: JSON.stringify({ type: "ready" }) });
-      }, 0);
-    }
-  });
-  close = vi.fn(() => {
-    this.readyState = MockWebSocket.CLOSED;
-    this.onclose?.();
-  });
-
-  constructor() {
-    MockWebSocket.instances.push(this);
-    setTimeout(() => this.onopen?.(), 0);
-  }
-}
+import { MockWebSocket } from "./MockWebSocket";
 
 vi.stubGlobal("WebSocket", MockWebSocket);
 
@@ -169,7 +142,7 @@ describe("chat page", () => {
     );
 
     expect(screen.getByTestId("chat-results-strip")).toHaveClass("overflow-x-auto");
-    expect(screen.getByText("Marketplace 4")).toBeInTheDocument();
+    expect(screen.getByText("Compact Leather Tote Variant 4")).toBeInTheDocument();
     expect(screen.getAllByRole("textbox")).toHaveLength(1);
     const voiceButton = screen.getByRole("button", { name: /voice chat/i });
     const sendButton = screen.getByRole("button", { name: /send message/i });
@@ -215,6 +188,7 @@ describe("chat page", () => {
       await new Promise((resolve) => setTimeout(resolve, 250));
     });
 
+    // Toggle voice off by clicking the active voice button (pause), then again (stop)
     const voiceButtons = screen.getAllByRole("button", { name: /voice chat/i });
     fireEvent.click(voiceButtons[voiceButtons.length - 1]);
     fireEvent.click(screen.getAllByRole("button", { name: /voice chat/i }).slice(-1)[0]);

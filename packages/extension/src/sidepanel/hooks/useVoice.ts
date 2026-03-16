@@ -408,10 +408,6 @@ export function useVoice({ backendUrl, context, onConversationCommit }: UseVoice
     commitPendingConversation();
     cleanup();
     setStatus("idle");
-    inputTranscriptRef.current = "";
-    outputTranscriptRef.current = "";
-    setInputTranscript("");
-    setOutputTranscript("");
   }, [cleanup, commitPendingConversation]);
 
   return {

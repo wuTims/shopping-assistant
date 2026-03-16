@@ -228,7 +228,7 @@ export function liveWebSocket(c: Context): WSEvents {
 
           // Send product context as a user message (keeps system prompt injection-free)
           const contextData = message.context;
-          if (contextData && (contextData.product || contextData.focusedProduct || contextData.currentProduct || contextData.results)) {
+          if (contextData && (contextData.focusedProduct || contextData.currentProduct || contextData.results)) {
             const contextText = buildVoiceContextTurnText(contextData);
             session.sendClientContent({
               turns: [{ role: "user", parts: [{ text: contextText }] }],

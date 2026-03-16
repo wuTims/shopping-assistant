@@ -209,7 +209,7 @@ function toCurrentProductContext(product: ProductDisplayInfo): ChatProductContex
     price: product.price,
     currency: product.currency,
     marketplace: product.marketplace ?? null,
-    imageUrl: product.imageUrl ?? product.displayImageDataUrl ?? null,
+    imageUrl: product.imageUrl ?? null,
   };
 }
 
@@ -536,12 +536,20 @@ export function SidepanelStateProvider({
     setSavedLinks((links) => links.filter((link) => link.id !== id));
   }, []);
 
+  // Snapshot the focus/context at voice session start so mid-session focus
+  // changes don't cause committed turns to be attributed to the wrong product.
+  const voiceSessionContextRef = useRef<{
+    product: ChatProductContext | null;
+    results: RankedResult[];
+  } | null>(null);
+
   const commitVoiceConversation = useCallback((turn: { inputTranscript: string; outputTranscript: string }) => {
+    const snapshot = voiceSessionContextRef.current;
     setChatMessages((messages) => {
       const nextMessages: ChatMessage[] = [];
-      const baseContext = messages.length === 0 && selectedChatFocus && currentResponse ? {
-        currentProduct: selectedChatFocus.product,
-        searchResults: currentResponse.results,
+      const baseContext = messages.length === 0 && snapshot ? {
+        currentProduct: snapshot.product,
+        searchResults: snapshot.results,
       } : null;
       const baseTimestamp = Date.now();
 
@@ -569,7 +577,7 @@ export function SidepanelStateProvider({
 
       return nextMessages.length > 0 ? [...messages, ...nextMessages] : messages;
     });
-  }, [currentResponse, selectedChatFocus]);
+  }, []);
 
   const voiceContext = useMemo(() => ({
     focusedProduct: selectedChatFocus ? {
@@ -602,11 +610,24 @@ export function SidepanelStateProvider({
     onConversationCommit: commitVoiceConversation,
   });
 
+  const wrappedStartVoice = useCallback(async () => {
+    voiceSessionContextRef.current = {
+      product: selectedChatFocus?.product ?? null,
+      results: currentResponse?.results ?? [],
+    };
+    await voice.start();
+  }, [voice.start, selectedChatFocus, currentResponse]);
+
+  const wrappedEndVoice = useCallback(() => {
+    voice.endSession();
+    voiceSessionContextRef.current = null;
+  }, [voice.endSession]);
+
   useEffect(() => {
     if (viewState.view !== "results") {
-      voice.endSession();
+      wrappedEndVoice();
     }
-  }, [viewState.view, voice.endSession]);
+  }, [viewState.view, wrappedEndVoice]);
 
   const value = useMemo<SidepanelStateValue>(() => ({
     viewState,
@@ -645,9 +666,9 @@ export function SidepanelStateProvider({
     voiceInputTranscript: voice.inputTranscript,
     voiceOutputTranscript: voice.outputTranscript,
     voiceError: voice.error,
-    startVoice: voice.start,
+    startVoice: wrappedStartVoice,
     pauseVoice: voice.pauseMic,
-    endVoiceSession: voice.endSession,
+    endVoiceSession: wrappedEndVoice,
   }), [
     addSavedLink,
     chatLoading,
@@ -672,9 +693,9 @@ export function SidepanelStateProvider({
     voice.inputTranscript,
     voice.outputTranscript,
     voice.error,
-    voice.start,
+    wrappedStartVoice,
     voice.pauseMic,
-    voice.endSession,
+    wrappedEndVoice,
   ]);
 
   return (

@@ -355,7 +355,7 @@ function ChatRoute() {
                         )}
                       </div>
                       <p className="truncate text-xs font-medium text-text-main">
-                        {option.kind === "current" ? option.label : option.subtitle}
+                        {option.label}
                       </p>
                       <p className="mt-1 truncate text-xs text-text-muted">{option.priceLabel}</p>
                     </button>

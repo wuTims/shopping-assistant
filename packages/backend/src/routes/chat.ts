@@ -37,7 +37,7 @@ function extractRetrySeconds(error: unknown): number | null {
     if (!detail || typeof detail !== "object") continue;
     const retryDelay = (detail as { retryDelay?: unknown }).retryDelay;
     if (typeof retryDelay === "string") {
-      const match = retryDelay.match(/(\d+)/);
+      const match = retryDelay.match(/(\d+\.?\d*)/);
       if (match) {
         return Number(match[1]);
       }

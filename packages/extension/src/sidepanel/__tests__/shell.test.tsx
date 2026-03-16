@@ -123,7 +123,7 @@ describe("sidepanel routed shell", () => {
 
     fireEvent.click(screen.getByRole("link", { name: /chat now/i }));
     expect(screen.getByText(/shopping assistant/i)).toBeInTheDocument();
-    expect(screen.getByText("AliExpress")).toBeInTheDocument();
+    expect(screen.getByText("Compact Leather Tote Bag")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("link", { name: /settings/i }));
     expect(screen.getByText("Settings")).toBeInTheDocument();
