@@ -35,8 +35,11 @@ export async function quickHttpPriceEnrich(
 ): Promise<{
   prices: Map<string, { price: number; currency: string }>;
   deadLinks: Set<string>;
+  /** Result IDs where the HTTP liveness check failed (timeout/network error). */
+  unreachable: Set<string>;
 }> {
   const deadLinks = new Set<string>();
+  const unreachable = new Set<string>();
   const prices = new Map<string, { price: number; currency: string }>();
 
   // Price extraction for priceless results via HTTP (no Playwright)
@@ -67,6 +70,13 @@ export async function quickHttpPriceEnrich(
     // GET requests — extract price + check liveness + stale detection
     ...priceless.map(async (r) => {
       const result = await fetchAndExtractPrice(r.productUrl);
+      if (result.httpStatus === null) {
+        console.log(
+          `[quick-enrich] Unreachable: ${r.productUrl.slice(0, 80)}`,
+        );
+        unreachable.add(r.id);
+        return;
+      }
       if (result.httpStatus === 404 || result.httpStatus === 410) {
         console.log(
           `[quick-enrich] Dead link (${result.httpStatus}): ${r.productUrl.slice(0, 80)}`,
@@ -95,6 +105,13 @@ export async function quickHttpPriceEnrich(
     // return shipping cost or bid price instead of the actual product price.
     ...clusterPriced.map(async (r) => {
       const result = await fetchAndExtractPrice(r.productUrl);
+      if (result.httpStatus === null) {
+        console.log(
+          `[quick-enrich] Unreachable: ${r.productUrl.slice(0, 80)}`,
+        );
+        unreachable.add(r.id);
+        return;
+      }
       if (result.httpStatus === 404 || result.httpStatus === 410) {
         console.log(
           `[quick-enrich] Dead link (${result.httpStatus}): ${r.productUrl.slice(0, 80)}`,
@@ -126,6 +143,13 @@ export async function quickHttpPriceEnrich(
     // products with "Currently unavailable" text that only stale detection catches.
     ...unchecked.map(async (r) => {
       const result = await fetchAndExtractPrice(r.productUrl);
+      if (result.httpStatus === null) {
+        console.log(
+          `[quick-enrich] Unreachable: ${r.productUrl.slice(0, 80)}`,
+        );
+        unreachable.add(r.id);
+        return;
+      }
       if (result.httpStatus === 404 || result.httpStatus === 410) {
         console.log(
           `[quick-enrich] Dead link (${result.httpStatus}): ${r.productUrl.slice(0, 80)}`,
@@ -151,8 +175,8 @@ export async function quickHttpPriceEnrich(
   ]);
 
   console.log(
-    `[quick-enrich] Found ${prices.size} prices, ${deadLinks.size} dead links`,
+    `[quick-enrich] Found ${prices.size} prices, ${deadLinks.size} dead links, ${unreachable.size} unreachable`,
   );
-  return { prices, deadLinks };
+  return { prices, deadLinks, unreachable };
 }
 

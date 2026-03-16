@@ -296,6 +296,7 @@ function ChatRoute() {
     chatFocusOptions, selectedChatFocusId, setSelectedChatFocusId,
     chatMessages, chatLoading, sendChatMessage,
     isVoiceRecording, voiceStatus, voiceInputTranscript, voiceOutputTranscript,
+    voiceToolActivity, voiceToolResultBatches,
   } = useSidepanelState();
 
   return (
@@ -385,6 +386,8 @@ function ChatRoute() {
             voiceStatus={voiceStatus}
             voiceInputTranscript={voiceInputTranscript}
             voiceOutputTranscript={voiceOutputTranscript}
+            toolActivity={voiceToolActivity}
+            voiceToolResults={voiceToolResultBatches}
           />
         </div>
         <ChatInput />

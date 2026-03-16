@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Shopping Source Discovery",
+  "name": "Merx",
   "version": "0.1.0",
   "description": "Find cheaper alternatives for any product you see online.",
   "permissions": ["sidePanel", "storage", "activeTab", "scripting"],
@@ -20,7 +20,7 @@
     "default_path": "src/sidepanel/index.html"
   },
   "action": {
-    "default_title": "Personal Shopper"
+    "default_title": "Merx"
   },
   "web_accessible_resources": [
     {
@@ -32,5 +32,10 @@
       "matches": ["<all_urls>"]
     }
   ],
-  "icons": {}
+  "icons": {
+    "16": "src/icons/icon-16.png",
+    "32": "src/icons/icon-32.png",
+    "48": "src/icons/icon-48.png",
+    "128": "src/icons/icon-128.png"
+  }
 }

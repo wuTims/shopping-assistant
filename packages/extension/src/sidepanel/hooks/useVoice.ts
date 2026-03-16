@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { WsClientMessage, WsServerMessage } from "@shopping-assistant/shared";
+import type { WsClientMessage, WsServerMessage, RankedResult } from "@shopping-assistant/shared";
 import {
   VOICE_INPUT_SAMPLE_RATE,
   VOICE_OUTPUT_SAMPLE_RATE,
@@ -11,6 +11,7 @@ export interface UseVoiceOptions {
   backendUrl: string;
   context: Record<string, unknown>;
   onConversationCommit?: (turn: { inputTranscript: string; outputTranscript: string }) => void;
+  onToolResult?: (results: RankedResult[]) => void;
 }
 
 export interface UseVoiceReturn {
@@ -19,6 +20,7 @@ export interface UseVoiceReturn {
   inputTranscript: string;
   outputTranscript: string;
   error: string | null;
+  toolActivity: { active: boolean; toolName: string | null };
   start: () => Promise<void>;
   pauseMic: () => void;
   endSession: () => void;
@@ -82,11 +84,12 @@ export function applyPlaybackEnvelope(samples: Float32Array, fadeSamples = 96): 
   return normalized;
 }
 
-export function useVoice({ backendUrl, context, onConversationCommit }: UseVoiceOptions): UseVoiceReturn {
+export function useVoice({ backendUrl, context, onConversationCommit, onToolResult }: UseVoiceOptions): UseVoiceReturn {
   const [status, setStatus] = useState<VoiceStatus>("idle");
   const [inputTranscript, setInputTranscript] = useState("");
   const [outputTranscript, setOutputTranscript] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [toolActivity, setToolActivity] = useState<{ active: boolean; toolName: string | null }>({ active: false, toolName: null });
 
   const wsRef = useRef<WebSocket | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -152,6 +155,7 @@ export function useVoice({ backendUrl, context, onConversationCommit }: UseVoice
     }
     activeSourcesRef.current = [];
     nextPlayTimeRef.current = 0;
+    setToolActivity({ active: false, toolName: null });
 
     cleaningUpRef.current = false;
   }, [stopCapture]);
@@ -208,6 +212,9 @@ export function useVoice({ backendUrl, context, onConversationCommit }: UseVoice
   const contextRef = useRef(context);
   contextRef.current = context;
 
+  const onToolResultRef = useRef(onToolResult);
+  onToolResultRef.current = onToolResult;
+
   const ensureMicPermission = useCallback(async (): Promise<boolean> => {
     try {
       const result = await navigator.permissions.query({ name: "microphone" as PermissionName });
@@ -248,6 +255,7 @@ export function useVoice({ backendUrl, context, onConversationCommit }: UseVoice
     setInputTranscript("");
     setOutputTranscript("");
     setStatus("connecting");
+    setToolActivity({ active: false, toolName: null });
 
     try {
       const permitted = await ensureMicPermission();
@@ -306,6 +314,19 @@ export function useVoice({ backendUrl, context, onConversationCommit }: UseVoice
             break;
           case "session_resumption":
             console.log("[voice] Session resumption token received");
+            break;
+          case "tool_start":
+            setToolActivity({ active: true, toolName: msg.toolName });
+            break;
+          case "tool_result":
+            setToolActivity({ active: false, toolName: null });
+            onToolResultRef.current?.(msg.results);
+            break;
+          case "tool_done":
+            setToolActivity({ active: false, toolName: null });
+            break;
+          case "tool_cancelled":
+            setToolActivity({ active: false, toolName: null });
             break;
           case "error":
             readyReject?.(new Error(msg.message));
@@ -416,6 +437,7 @@ export function useVoice({ backendUrl, context, onConversationCommit }: UseVoice
     inputTranscript,
     outputTranscript,
     error,
+    toolActivity,
     start,
     pauseMic,
     endSession,

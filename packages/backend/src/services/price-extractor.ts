@@ -41,7 +41,72 @@ export function detectStaleContent(html: string): boolean {
   const visible = html
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "");
-  return STALE_BODY_PATTERNS.some((pattern) => pattern.test(visible));
+  if (STALE_BODY_PATTERNS.some((pattern) => pattern.test(visible))) return true;
+
+  // Also check JSON-LD availability (catches client-rendered "unavailable" pages
+  // like DHGate where visible text is injected by JS but structured data is static)
+  return detectJsonLdUnavailable(html);
+}
+
+/**
+ * Schema.org availability values that indicate a product is not purchasable.
+ * Values are lowercased, with the "https://schema.org/" prefix stripped.
+ */
+const UNAVAILABLE_AVAILABILITIES = new Set([
+  "outofstock",
+  "discontinued",
+  "soldout",
+]);
+
+/**
+ * Check JSON-LD structured data for availability signals that indicate the
+ * product is no longer available, even when the page returns HTTP 200 with a
+ * valid price in its structured data.
+ */
+function detectJsonLdUnavailable(html: string): boolean {
+  const blocks = [...html.matchAll(JSON_LD_RE)].map((m) => m[1]);
+  for (const block of blocks) {
+    try {
+      const data = JSON.parse(block);
+      if (checkJsonLdAvailability(data)) return true;
+    } catch {
+      // malformed JSON-LD, skip
+    }
+  }
+  return false;
+}
+
+function checkJsonLdAvailability(obj: unknown): boolean {
+  if (!obj || typeof obj !== "object") return false;
+  if (Array.isArray(obj)) return obj.some(checkJsonLdAvailability);
+
+  const record = obj as Record<string, unknown>;
+
+  // Recurse into @graph arrays
+  if ("@graph" in record && Array.isArray(record["@graph"])) {
+    return record["@graph"].some(checkJsonLdAvailability);
+  }
+
+  // Only inspect Product types
+  const type = record["@type"];
+  const isProduct = type === "Product" || (Array.isArray(type) && type.includes("Product"));
+  if (!isProduct) return false;
+
+  const offers = record["offers"];
+  if (!offers || typeof offers !== "object") return false;
+
+  const offerList = Array.isArray(offers) ? offers : [offers];
+  for (const offer of offerList) {
+    if (typeof offer === "object" && offer !== null) {
+      const avail = (offer as Record<string, unknown>)["availability"];
+      if (typeof avail === "string") {
+        // Strip schema.org prefix: "https://schema.org/OutOfStock" → "outofstock"
+        const normalized = avail.replace(/^https?:\/\/schema\.org\//i, "").toLowerCase();
+        if (UNAVAILABLE_AVAILABILITIES.has(normalized)) return true;
+      }
+    }
+  }
+  return false;
 }
 
 /** Fetch a URL via lightweight HTTP and extract price from structured data in HTML. */
@@ -59,6 +124,17 @@ export async function fetchAndExtractPrice(
     });
 
     if (!res.ok) return { price: null, currency: null, httpStatus: res.status };
+
+    // Redirect detection: stale products often redirect to homepage, search, or error pages
+    if (res.url !== url) {
+      try {
+        const finalPath = new URL(res.url).pathname;
+        if (finalPath === "/" || finalPath.includes("/not-found") || finalPath.includes("/not_found") || finalPath === "/404") {
+          console.log(`[price-extract] Stale redirect to ${finalPath}: ${new URL(url).hostname}`);
+          return { price: null, currency: null, httpStatus: res.status, stale: true };
+        }
+      } catch { /* URL parsing failed, continue */ }
+    }
 
     const html = await res.text();
     const stale = detectStaleContent(html);
