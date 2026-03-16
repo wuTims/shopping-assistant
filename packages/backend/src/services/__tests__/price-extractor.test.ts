@@ -49,6 +49,43 @@ describe("extractPriceFromHtml", () => {
       expect(extractPriceFromHtml(html)).toEqual({ price: 199, currency: "USD" });
     });
 
+    it("handles @type as array (Shopify pattern)", () => {
+      const html = `<html><head>
+        <script type="application/ld+json">
+        {"@type":["Product","ItemPage"],"offers":{"price":"39.99","priceCurrency":"USD"}}
+        </script>
+        </head><body></body></html>`;
+      expect(extractPriceFromHtml(html)).toEqual({ price: 39.99, currency: "USD" });
+    });
+
+    it("handles offers as array (Amazon pattern)", () => {
+      const html = `<html><head>
+        <script type="application/ld+json">
+        {"@type":"Product","offers":[{"@type":"Offer","price":"19.99","priceCurrency":"USD"}]}
+        </script>
+        </head><body></body></html>`;
+      expect(extractPriceFromHtml(html)).toEqual({ price: 19.99, currency: "USD" });
+    });
+
+    it("skips malformed JSON-LD and extracts from valid block", () => {
+      const html = `<html><head>
+        <script type="application/ld+json">{invalid json here</script>
+        <script type="application/ld+json">
+        {"@type":"Product","offers":{"price":"12.99","priceCurrency":"USD"}}
+        </script>
+        </head><body></body></html>`;
+      expect(extractPriceFromHtml(html)).toEqual({ price: 12.99, currency: "USD" });
+    });
+
+    it("rejects zero and negative prices", () => {
+      const html = `<html><head>
+        <script type="application/ld+json">
+        {"@type":"Product","offers":{"price":"0","priceCurrency":"USD"}}
+        </script>
+        </head><body></body></html>`;
+      expect(extractPriceFromHtml(html)).toEqual({ price: null, currency: null });
+    });
+
     it("returns null for non-product JSON-LD", () => {
       const html = `<html><head>
         <script type="application/ld+json">{"@type":"Organization","name":"Acme"}</script>
@@ -84,6 +121,40 @@ describe("extractPriceFromHtml", () => {
     it("returns null for html with no price signals", () => {
       const html = `<html><body><p>Hello world</p></body></html>`;
       expect(extractPriceFromHtml(html)).toEqual({ price: null, currency: null });
+    });
+
+    it("picks the most frequent price when multiple candidates exist", () => {
+      // Simulate Amazon-like HTML where $29.99 appears 3 times and $10 appears once
+      const html = `<html><body>
+        <span class="price">$10.00</span>
+        <span class="a-price">$29.99</span>
+        <span class="buybox-price">$29.99</span>
+        <span class="our-price">$29.99</span>
+      </body></html>`;
+      expect(extractPriceFromHtml(html)).toEqual({ price: 29.99, currency: "USD" });
+    });
+
+    it("breaks frequency ties by preferring the higher price", () => {
+      // Both appear once — prefer higher (more likely the real product price vs a fee)
+      const html = `<html><body>
+        <span>$5.99</span>
+        <span>$24.99</span>
+      </body></html>`;
+      expect(extractPriceFromHtml(html)).toEqual({ price: 24.99, currency: "USD" });
+    });
+
+    it("still works with a single price match", () => {
+      const html = `<html><body><span class="price">$34.99</span></body></html>`;
+      expect(extractPriceFromHtml(html)).toEqual({ price: 34.99, currency: "USD" });
+    });
+
+    it("filters prices below MIN_REGEX_PRICE from frequency count", () => {
+      // $1, $2 should be ignored; $19.99 should win
+      const html = `<html><body>
+        <span>$1</span><span>$1</span><span>$2</span><span>$2</span>
+        <span>$19.99</span>
+      </body></html>`;
+      expect(extractPriceFromHtml(html)).toEqual({ price: 19.99, currency: "USD" });
     });
   });
 });

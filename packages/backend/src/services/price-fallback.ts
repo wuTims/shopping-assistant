@@ -21,12 +21,15 @@ async function getBrowser(): Promise<Browser> {
 export async function extractPriceFromUrl(
   url: string,
 ): Promise<{ price: number | null; currency: string | null }> {
+  const hostname = new URL(url).hostname;
+
   // Strategy 1: Lightweight HTTP fetch + structured data (fast, no bot detection)
   const httpResult = await fetchAndExtractPrice(url);
   if (httpResult.price !== null) {
-    console.log(`[price-fallback] HTTP extraction succeeded for ${new URL(url).hostname}`);
+    console.log(`[price-fallback] HTTP extraction succeeded for ${hostname}: ${httpResult.currency}${httpResult.price}`);
     return httpResult;
   }
+  console.log(`[price-fallback] HTTP extraction failed for ${hostname}, falling back to Playwright`);
 
   // Strategy 2: Playwright screenshot + Gemini Vision (slow, expensive, last resort)
   return extractPriceViaPlaywright(url);
@@ -90,18 +93,56 @@ async function extractPriceViaPlaywright(
   }
 }
 
+/**
+ * Detect URLs that are category/search/listing pages rather than product pages.
+ * Price extraction on these pages returns misleading prices (random product on page).
+ */
+function isNonProductUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.toLowerCase();
+    const search = parsed.search.toLowerCase();
+
+    // Category / listing / search patterns
+    if (path.match(/\/(shop|category|categories|collections|browse|search|s)\b/)) return true;
+    if (search.includes("k=") || search.includes("q=") || search.includes("query=")) return true;
+    // Filter/facet pages (e.g., macys.com/shop/womens/dresses?Color=Black)
+    if (path.match(/\/(womens|mens|kids|home|clothing|shoes|accessories)\//)) {
+      // But allow if URL also has a product-like identifier (DP, listing, item, product)
+      if (!path.match(/\/(dp|item|listing|product|products|p)\b/)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export async function fillMissingPrices(
   results: Array<{ id: string; productUrl: string; price: number | null; currency: string | null }>,
   maxResults: number,
 ): Promise<Map<string, { price: number; currency: string }>> {
+  const withPrice = results.filter((r) => r.price != null).length;
   const priceless = results
     .filter((r) => r.price == null)
     .slice(0, maxResults);
 
+  console.log(`[price-fallback] ${withPrice}/${results.length} results already have prices, attempting ${priceless.length} extractions`);
+
+  // Filter out non-product URLs (category/search pages) — prices from those are unreliable
+  const productUrls: typeof priceless = [];
+  for (const r of priceless) {
+    if (isNonProductUrl(r.productUrl)) {
+      console.log(`[price-fallback]   Skip (non-product URL): "${r.productUrl.slice(0, 80)}"`);
+    } else {
+      console.log(`[price-fallback]   Need price: "${r.productUrl.slice(0, 80)}"`);
+      productUrls.push(r);
+    }
+  }
+
   const extracted = new Map<string, { price: number; currency: string }>();
 
   const settled = await Promise.allSettled(
-    priceless.map(async (r) => {
+    productUrls.map(async (r) => {
       const result = await extractPriceFromUrl(r.productUrl);
       if (result.price != null && result.currency != null) {
         extracted.set(r.id, { price: result.price, currency: result.currency });

@@ -32,11 +32,17 @@ export function extractPriceFromHtml(
 ): { price: number | null; currency: string | null } {
   // Strategy 1: JSON-LD structured data
   const jsonLdResult = extractFromJsonLd(html);
-  if (jsonLdResult.price !== null) return jsonLdResult;
+  if (jsonLdResult.price !== null) {
+    console.log(`[price-extract] JSON-LD: ${jsonLdResult.currency}${jsonLdResult.price}`);
+    return jsonLdResult;
+  }
 
   // Strategy 2: Meta tags (Open Graph, product)
   const metaResult = extractFromMetaTags(html);
-  if (metaResult.price !== null) return metaResult;
+  if (metaResult.price !== null) {
+    console.log(`[price-extract] Meta tag: ${metaResult.currency}${metaResult.price}`);
+    return metaResult;
+  }
 
   // Strategy 3: Regex on visible text (least reliable)
   return extractFromRegex(html);
@@ -49,12 +55,8 @@ const JSON_LD_RE = /<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([
 function extractFromJsonLd(
   html: string,
 ): { price: number | null; currency: string | null } {
-  const blocks: string[] = [];
-  let match: RegExpExecArray | null;
-  while ((match = JSON_LD_RE.exec(html)) !== null) {
-    blocks.push(match[1]);
-  }
-  JSON_LD_RE.lastIndex = 0; // reset for next call
+  // Use matchAll to avoid shared mutable lastIndex state under concurrency
+  const blocks = [...html.matchAll(JSON_LD_RE)].map((m) => m[1]);
 
   for (const block of blocks) {
     try {
@@ -98,17 +100,18 @@ function extractPriceFromJsonLdObject(
   const record = obj as Record<string, unknown>;
   const type = record["@type"];
 
-  // Only extract from Product types
-  if (type !== "Product") return { price: null, currency: null };
+  // Only extract from Product types (handle array form: ["Product", "ItemPage"])
+  const isProduct = type === "Product" || (Array.isArray(type) && type.includes("Product"));
+  if (!isProduct) return { price: null, currency: null };
 
   const offers = record["offers"];
   if (!offers || typeof offers !== "object") return { price: null, currency: null };
 
-  return extractPriceFromOffer(offers as Record<string, unknown>);
+  return extractPriceFromOffer(offers as Record<string, unknown> | unknown[]);
 }
 
 function extractPriceFromOffer(
-  offer: Record<string, unknown>,
+  offer: Record<string, unknown> | unknown[],
 ): { price: number | null; currency: string | null } {
   // Handle array of offers — take the first one with a price
   if (Array.isArray(offer)) {
@@ -175,6 +178,10 @@ const PRICE_PATTERNS = [
   { re: /€\s*([\d,]+(?:\.\d{1,2})?)/, currency: "EUR" },
 ];
 
+// Minimum price to accept from regex fallback — avoids false positives
+// from coupon text ("Save $10"), quantity selectors, shipping costs, etc.
+const MIN_REGEX_PRICE = 3;
+
 function extractFromRegex(
   html: string,
 ): { price: number | null; currency: string | null } {
@@ -183,14 +190,41 @@ function extractFromRegex(
     .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "");
 
+  // Also strip common non-price contexts
+  const cleaned = visible
+    .replace(/save\s*\$\s*[\d,.]+/gi, "")
+    .replace(/off\s*\$\s*[\d,.]+/gi, "")
+    .replace(/coupon\s*\$\s*[\d,.]+/gi, "")
+    .replace(/\$\s*[\d,.]+\s*off/gi, "")
+    .replace(/\$\s*[\d,.]+\s*coupon/gi, "")
+    .replace(/shipping\s*\$\s*[\d,.]+/gi, "");
+
   for (const { re, currency } of PRICE_PATTERNS) {
-    const match = visible.match(re);
-    if (match) {
+    const allMatches = [...cleaned.matchAll(new RegExp(re.source, "g"))];
+
+    // Collect all valid prices and count frequency
+    const priceCounts = new Map<number, number>();
+    for (const match of allMatches) {
       const price = parseFloat(match[1].replace(/,/g, ""));
-      if (!isNaN(price) && price > 0) {
-        return { price, currency };
+      if (!isNaN(price) && price >= MIN_REGEX_PRICE) {
+        priceCounts.set(price, (priceCounts.get(price) ?? 0) + 1);
       }
     }
+
+    if (priceCounts.size === 0) continue;
+
+    // Pick the most frequent price; break ties by preferring higher price
+    let bestPrice = 0;
+    let bestCount = 0;
+    for (const [price, count] of priceCounts) {
+      if (count > bestCount || (count === bestCount && price > bestPrice)) {
+        bestPrice = price;
+        bestCount = count;
+      }
+    }
+
+    console.log(`[price-extract] Regex: matched ${currency}${bestPrice} (${bestCount}x from ${allMatches.length} candidates)`);
+    return { price: bestPrice, currency };
   }
 
   return { price: null, currency: null };
@@ -199,10 +233,10 @@ function extractFromRegex(
 // ── Utilities ────────────────────────────────────────────────────────────────
 
 function toNumber(value: unknown): number | null {
-  if (typeof value === "number" && isFinite(value)) return value;
+  if (typeof value === "number" && isFinite(value) && value > 0) return value;
   if (typeof value === "string") {
     const n = parseFloat(value.replace(/,/g, ""));
-    if (!isNaN(n) && isFinite(n)) return n;
+    if (!isNaN(n) && isFinite(n) && n > 0) return n;
   }
   return null;
 }
