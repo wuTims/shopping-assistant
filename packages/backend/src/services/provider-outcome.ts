@@ -11,6 +11,12 @@ export interface ProviderSearchOutcome {
   timedOutQueries: number;
 }
 
+export interface SplitProviderSearchOutcome {
+  textOutcome: ProviderSearchOutcome;
+  imageOutcome: ProviderSearchOutcome;
+  combinedOutcome: ProviderSearchOutcome;
+}
+
 export function resolveProviderStatus(
   successfulQueries: number,
   failedQueries: number,

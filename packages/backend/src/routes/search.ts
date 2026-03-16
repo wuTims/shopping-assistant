@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import type { SearchRequest, SearchResponse, ProductIdentification } from "@shopping-assistant/shared";
+import type { SearchRequest, SearchResponse, ProductIdentification, SearchResult } from "@shopping-assistant/shared";
 import {
   SEARCH_TIMEOUT_MS,
   MAX_RESULTS_FOR_RANKING,
@@ -10,10 +10,12 @@ import {
 } from "@shopping-assistant/shared";
 import {
   identifyProduct,
+  generateImageSearchQueries,
+  sanitizeImageSearchQueries,
 } from "../services/gemini.js";
 import type { FetchedImage } from "../services/gemini.js";
 import { searchProducts, searchImages } from "../services/brave.js";
-import { searchAliExpress } from "../services/aliexpress.js";
+import { searchAliExpressSplit } from "../services/aliexpress.js";
 import { fillMissingPrices } from "../services/price-fallback.js";
 import { generateMarketplaceQueries } from "../utils/marketplace-queries.js";
 import { extractMarketplace } from "../utils/marketplace.js";
@@ -26,6 +28,10 @@ import {
   diversityCap,
 } from "../services/ranking.js";
 import { computeVisualSimilarityScores, blendScores } from "../services/embedding.js";
+import {
+  annotateResultValidation,
+  isDisplayableCandidate,
+} from "../services/result-validation.js";
 
 export const searchRoute = new Hono();
 
@@ -81,7 +87,10 @@ searchRoute.post("/", async (c) => {
 
   // Always kick off title Brave search in parallel
   const titleBravePromise = titleQueries.length > 0
-    ? withTimeout(searchProducts(titleQueries), Math.max(remaining() - 1000, 5000))
+    ? withTimeout(
+        searchProviderByQuery(titleQueries, searchProducts, "text", "brave"),
+        Math.max(remaining() - 1000, 5000),
+      )
     : Promise.resolve(emptyProviderOutcome());
 
   let identification: ProductIdentification;
@@ -171,22 +180,41 @@ searchRoute.post("/", async (c) => {
   console.log(`[search:${requestId}] AliExpress queries: ${JSON.stringify(aliExpressQueries)}, hasImage: ${!!aliExpressImage}`);
 
   // Image search queries — use concise AI queries for best image results
-  const imageSearchQueries = aiQueries.slice(0, 2);
+  let rawImageSearchQueries: string[] = [];
+  let imageSearchQueries: string[] = [];
+  let rejectedImageSearchQueries: string[] = [];
+  try {
+    rawImageSearchQueries = await generateImageSearchQueries(imageSource, body.title);
+    const sanitizedImageQueries = sanitizeImageSearchQueries(rawImageSearchQueries, body.title);
+    imageSearchQueries = sanitizedImageQueries.acceptedQueries;
+    rejectedImageSearchQueries = sanitizedImageQueries.rejectedQueries;
+  } catch (err) {
+    console.warn(`[search:${requestId}] Gemini image query generation failed:`, err);
+  }
   console.log(`[search:${requestId}] Image search queries: ${JSON.stringify(imageSearchQueries)}`);
+  if (rejectedImageSearchQueries.length > 0) {
+    console.log(`[search:${requestId}] Rejected image queries: ${JSON.stringify(rejectedImageSearchQueries)}`);
+  }
 
-  const [aiBraveResult, marketplaceBraveResult, aliExpressResult, imageBraveResult] =
+  const [aiBraveResult, marketplaceBraveResult, aliExpressTextResult, aliExpressImageResult, imageBraveWebResult, imageBraveResult] =
     await Promise.allSettled([
       skipAiBrave
         ? Promise.resolve(emptyProviderOutcome())
-        : withTimeout(searchProducts(aiQueries), phase2Deadline),
+        : withTimeout(searchProviderByQuery(aiQueries, searchProducts, "text", "brave"), phase2Deadline),
       marketplaceQueries.length > 0
-        ? withTimeout(searchProducts(marketplaceQueries), phase2Deadline)
+        ? withTimeout(searchProviderByQuery(marketplaceQueries, searchProducts, "text", "brave"), phase2Deadline)
         : Promise.resolve(emptyProviderOutcome()),
       aliExpressQueries.length > 0
-        ? withTimeout(searchAliExpress(aliExpressQueries, aliExpressImage), phase2Deadline)
+        ? withTimeout(searchAliExpressTextByQuery(aliExpressQueries), phase2Deadline)
+        : Promise.resolve(emptyProviderOutcome()),
+      aliExpressImage
+        ? withTimeout(searchAliExpressImage(aliExpressImage), phase2Deadline)
         : Promise.resolve(emptyProviderOutcome()),
       imageSearchQueries.length > 0
-        ? withTimeout(searchImages(imageSearchQueries), phase2Deadline)
+        ? withTimeout(searchProviderByQuery(imageSearchQueries, searchProducts, "image", "brave"), phase2Deadline)
+        : Promise.resolve(emptyProviderOutcome()),
+      imageSearchQueries.length > 0
+        ? withTimeout(searchProviderByQuery(imageSearchQueries, searchImages, "image", "brave"), phase2Deadline)
         : Promise.resolve(emptyProviderOutcome()),
     ]);
 
@@ -205,13 +233,33 @@ searchRoute.post("/", async (c) => {
     console.error(`[search:${requestId}] Brave (marketplace) failed:`, marketplaceBraveResult.reason);
   }
 
-  const aliExpressOutcome: ProviderSearchOutcome =
-    aliExpressResult.status === "fulfilled"
-      ? aliExpressResult.value
-      : rejectedProviderOutcome(aliExpressQueries.length, aliExpressResult.reason);
+  const aliExpressTextOutcome: ProviderSearchOutcome =
+    aliExpressTextResult.status === "fulfilled"
+      ? aliExpressTextResult.value
+      : rejectedProviderOutcome(aliExpressQueries.length, aliExpressTextResult.reason);
 
-  if (aliExpressResult.status === "rejected") {
-    console.error(`[search:${requestId}] AliExpress failed:`, aliExpressResult.reason);
+  if (aliExpressTextResult.status === "rejected") {
+    console.error(`[search:${requestId}] AliExpress (text) failed:`, aliExpressTextResult.reason);
+  }
+
+  const aliExpressImageOutcome: ProviderSearchOutcome =
+    aliExpressImageResult.status === "fulfilled"
+      ? aliExpressImageResult.value
+      : aliExpressImage
+        ? rejectedProviderOutcome(1, aliExpressImageResult.reason)
+        : emptyProviderOutcome();
+
+  if (aliExpressImageResult.status === "rejected") {
+    console.error(`[search:${requestId}] AliExpress (image) failed:`, aliExpressImageResult.reason);
+  }
+
+  const imageBraveWebOutcome: ProviderSearchOutcome =
+    imageBraveWebResult.status === "fulfilled"
+      ? imageBraveWebResult.value
+      : rejectedProviderOutcome(imageSearchQueries.length, imageBraveWebResult.reason);
+
+  if (imageBraveWebResult.status === "rejected") {
+    console.error(`[search:${requestId}] Brave (image-web) failed:`, imageBraveWebResult.reason);
   }
 
   const imageBraveOutcome: ProviderSearchOutcome =
@@ -224,12 +272,20 @@ searchRoute.post("/", async (c) => {
   }
 
   // Combine brave outcomes
+  const titleBraveTagged = titleBraveOutcome;
+  const aiBraveTagged = aiBraveOutcome;
+  const marketplaceBraveTagged = marketplaceBraveOutcome;
+  const imageBraveWebTagged = imageBraveWebOutcome;
+  const imageBraveTagged = imageBraveOutcome;
+  const aliExpressTextTagged = aliExpressTextOutcome;
+  const aliExpressImageTagged = aliExpressImageOutcome;
+
   const braveOutcome = combineBraveOutcomes(
     combineBraveOutcomes(
-      combineBraveOutcomes(titleBraveOutcome, aiBraveOutcome),
-      marketplaceBraveOutcome,
+      combineBraveOutcomes(titleBraveTagged, aiBraveTagged),
+      marketplaceBraveTagged,
     ),
-    imageBraveOutcome,
+    combineBraveOutcomes(imageBraveWebTagged, imageBraveTagged),
   );
 
   // Check if request was aborted during Phase 2
@@ -240,8 +296,12 @@ searchRoute.post("/", async (c) => {
 
   // ── Phase 3: merge → dedup → filter source URL → heuristicPreSort → cap ──
 
-  const allResults = [...braveOutcome.results, ...aliExpressOutcome.results];
-  const deduped = mergeAndDedup(allResults);
+  const allResults = [
+    ...braveOutcome.results,
+    ...aliExpressTextTagged.results,
+    ...aliExpressImageTagged.results,
+  ];
+  const deduped = mergeAndDedup(allResults).map(annotateResultValidation);
 
   // Filter out the exact source product URL — users don't want to see the item they're already viewing.
   // Intentionally strips ALL query params (not just tracking params like normalizeUrl does) for
@@ -250,13 +310,23 @@ searchRoute.post("/", async (c) => {
   const filtered = deduped.filter((r) => {
     const normalized = r.productUrl.split("?")[0].toLowerCase().replace(/\/$/, "");
     return normalized !== sourceNormalized;
-  });
+  }).filter(isDisplayableCandidate);
+  const laneDiagnostics = countResultsByLane(filtered);
 
   const preSorted = heuristicPreSort(filtered, identification, body.price, sourceMarketplace);
   const capped = diversityCap(preSorted, MAX_RESULTS_FOR_RANKING, sourceMarketplace);
 
   // ── Source attribution logging ──────────────────────────────────────────
-  console.log(`[search:${requestId}] Source breakdown: Brave(title)=${titleBraveOutcome.results.length}, Brave(AI)=${aiBraveOutcome.results.length}, Brave(marketplace)=${marketplaceBraveOutcome.results.length}, Brave(image)=${imageBraveOutcome.results.length}, AliExpress=${aliExpressOutcome.results.length}`);
+  console.log(
+    `[search:${requestId}] Source breakdown: ` +
+    `Brave(title)=${titleBraveOutcome.results.length}, ` +
+    `Brave(AI)=${aiBraveOutcome.results.length}, ` +
+    `Brave(marketplace)=${marketplaceBraveOutcome.results.length}, ` +
+    `Brave(image-web)=${imageBraveWebOutcome.results.length}, ` +
+    `Brave(image)=${imageBraveOutcome.results.length}, ` +
+    `AliExpress(text)=${aliExpressTextOutcome.results.length}, ` +
+    `AliExpress(image)=${aliExpressImageOutcome.results.length}`,
+  );
 
   // Marketplace breakdown for deduped and capped results
   const mpCount = (arr: typeof deduped) => {
@@ -286,6 +356,7 @@ searchRoute.post("/", async (c) => {
         if (result) {
           result.price = price;
           result.currency = currency;
+          result.priceSource = "fallback_screenshot";
         }
       }
       console.log(`[search:${requestId}] Price fallback filled ${extractedPrices.size} prices`);
@@ -370,7 +441,7 @@ searchRoute.post("/", async (c) => {
     },
     results: ranked,
     searchMeta: {
-      totalFound: deduped.length,
+      totalFound: filtered.length,
       braveResultCount: braveOutcome.results.length,
       groundingResultCount: 0,
       sourceStatus: {
@@ -390,6 +461,12 @@ searchRoute.post("/", async (c) => {
           failedQueries: 0,
           timedOutQueries: 0,
         },
+      },
+      laneDiagnostics,
+      imageQueryDiagnostics: {
+        rawQueryCount: rawImageSearchQueries.length,
+        acceptedQueries: imageSearchQueries,
+        rejectedQueries: rejectedImageSearchQueries,
       },
       searchDurationMs: Date.now() - searchStart,
       rankingDurationMs,
@@ -498,5 +575,97 @@ function rejectedProviderOutcome(totalQueries: number, err: unknown): ProviderSe
     failedQueries: totalQueries,
     timedOutQueries: status === "timeout" ? totalQueries : 0,
   };
+}
+
+function tagOutcomeResults(
+  outcome: ProviderSearchOutcome,
+  lane: "text" | "image" | "hybrid",
+  provider: "brave" | "aliexpress",
+  query?: string,
+): ProviderSearchOutcome {
+  return {
+    ...outcome,
+    results: outcome.results.map((result) => ({
+      ...result,
+      retrievalLane: lane,
+      ...(query
+        ? {
+            matchedQueries: [
+              { query, lane: lane === "hybrid" ? "image" : lane, provider },
+            ],
+          }
+        : {}),
+    })),
+  };
+}
+
+async function searchProviderByQuery(
+  queries: string[],
+  runner: (queries: string[]) => Promise<ProviderSearchOutcome>,
+  lane: "text" | "image",
+  provider: "brave" | "aliexpress",
+): Promise<ProviderSearchOutcome> {
+  const outcomes = await Promise.allSettled(
+    queries.map(async (query) => {
+      const outcome = await runner([query]);
+      return tagOutcomeResults(outcome, lane, provider, query);
+    }),
+  );
+
+  let combined = emptyProviderOutcome();
+  for (let i = 0; i < outcomes.length; i++) {
+    const outcome = outcomes[i];
+    if (outcome.status === "fulfilled") {
+      combined = combineBraveOutcomes(combined, outcome.value);
+    } else {
+      combined = combineBraveOutcomes(combined, rejectedProviderOutcome(1, outcome.reason));
+    }
+  }
+  return combined;
+}
+
+async function searchAliExpressTextByQuery(queries: string[]): Promise<ProviderSearchOutcome> {
+  const outcomes = await Promise.allSettled(
+    queries.map(async (query) => {
+      const outcome = await searchAliExpressSplit([query], null);
+      return tagOutcomeResults(outcome.textOutcome, "text", "aliexpress", query);
+    }),
+  );
+
+  let combined = emptyProviderOutcome();
+  for (let i = 0; i < outcomes.length; i++) {
+    const outcome = outcomes[i];
+    if (outcome.status === "fulfilled") {
+      combined = combineBraveOutcomes(combined, outcome.value);
+    } else {
+      combined = combineBraveOutcomes(combined, rejectedProviderOutcome(1, outcome.reason));
+    }
+  }
+  return combined;
+}
+
+async function searchAliExpressImage(image: FetchedImage): Promise<ProviderSearchOutcome> {
+  const outcome = await searchAliExpressSplit([], image);
+  return tagOutcomeResults(outcome.imageOutcome, "image", "aliexpress", "[image-search]");
+}
+
+function countResultsByLane(results: SearchResult[]): {
+  textResultCount: number;
+  imageResultCount: number;
+  hybridResultCount: number;
+} {
+  const counts = {
+    textResultCount: 0,
+    imageResultCount: 0,
+    hybridResultCount: 0,
+  };
+
+  for (const result of results) {
+    if (result.retrievalLane === "text") counts.textResultCount++;
+    else if (result.retrievalLane === "image") counts.imageResultCount++;
+    else if (result.retrievalLane === "hybrid") counts.hybridResultCount++;
+  }
+
+  return counts;
 }
 
