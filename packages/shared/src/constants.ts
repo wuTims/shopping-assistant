@@ -16,7 +16,8 @@ export const CONFIDENCE_THRESHOLDS = {
   medium: 0.4,
 } as const;
 
-export const MIN_CONFIDENCE_SCORE = 0.15;
+export const MIN_CONFIDENCE_SCORE = 0.25;
+export const MIN_DISPLAY_RESULTS = 10;
 
 export const MAX_RESULTS_FOR_RANKING = 15;
 
@@ -24,6 +25,8 @@ export const EMBEDDING_TIMEOUT_MS = 6_000;
 export const MAX_IMAGES_FOR_EMBEDDING = 8;
 export const VISUAL_SCORE_WEIGHT = 0.4;
 export const TEXT_SCORE_WEIGHT = 0.6;
+export const SOURCE_MARKETPLACE_PENALTY = 0.15;
+export const MAX_SOURCE_MARKETPLACE_RESULTS = 2;
 
 export const OVERLAY_ICON_SIZE_PX = 28;
 export const OVERLAY_ICON_HOVER_SIZE_PX = 32;
