@@ -1,4 +1,4 @@
-import { createHmac } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import type { SearchResult } from "@shopping-assistant/shared";
 import type { FetchedImage } from "./gemini.js";
 import type { ProviderSearchOutcome } from "./provider-outcome.js";
@@ -10,9 +10,9 @@ const APP_KEY = process.env.ALIEXPRESS_APP_KEY ?? "";
 const APP_SECRET = process.env.ALIEXPRESS_API_KEY ?? "";
 const PER_QUERY_TIMEOUT_MS = 8_000;
 
-// Token state — in production, persist to a store with TTL
-let accessToken = "";
-let tokenExpiry = 0;
+// Token state — bootstrap from env var, refresh via setAccessToken()
+let accessToken = process.env.ALIEXPRESS_ACCESS_TOKEN ?? "";
+let tokenExpiry = accessToken ? Date.now() + 24 * 60 * 60 * 1000 : 0;
 
 export function setAccessToken(token: string, expiresInSeconds: number): void {
   accessToken = token;
@@ -21,6 +21,10 @@ export function setAccessToken(token: string, expiresInSeconds: number): void {
 
 export function hasValidToken(): boolean {
   return accessToken !== "" && Date.now() < tokenExpiry;
+}
+
+export function getAccessToken(): string {
+  return accessToken;
 }
 
 // ── Request Signing (TOP API) ────────────────────────────────────────────────
@@ -112,7 +116,7 @@ export async function imageSearch(
 
   // Image search requires multipart upload
   const imageBuffer = Buffer.from(image.data, "base64");
-  const boundary = "----FormBoundary" + Date.now();
+  const boundary = "----FormBoundary" + randomUUID();
   let textParts = "";
   for (const [k, v] of Object.entries(params)) {
     textParts += `--${boundary}\r\n`;
@@ -151,7 +155,16 @@ export async function searchAliExpress(
   image: FetchedImage | null,
 ): Promise<ProviderSearchOutcome> {
   if (!hasValidToken()) {
-    console.warn("[aliexpress] No valid token — skipping AliExpress search");
+    const hasKey = APP_KEY !== "";
+    const hasSecret = APP_SECRET !== "";
+    const hasToken = accessToken !== "";
+    const expired = accessToken !== "" && Date.now() >= tokenExpiry;
+    console.warn(
+      `[aliexpress] No valid token — skipping AliExpress search. ` +
+      `APP_KEY=${hasKey ? "set" : "MISSING"}, APP_SECRET=${hasSecret ? "set" : "MISSING"}, ` +
+      `ACCESS_TOKEN=${hasToken ? (expired ? "EXPIRED" : "set") : "MISSING"}` +
+      (expired ? `, expired ${Math.round((Date.now() - tokenExpiry) / 1000)}s ago` : ""),
+    );
     return {
       results: [],
       status: "ok",
@@ -160,6 +173,13 @@ export async function searchAliExpress(
       failedQueries: 0,
       timedOutQueries: 0,
     };
+  }
+
+  const textCount = queries.length;
+  const imageCount = image ? 1 : 0;
+  console.log(`[aliexpress] Starting search: ${textCount} text queries + ${imageCount} image search`);
+  for (const q of queries) {
+    console.log(`[aliexpress]   Text query: "${q.slice(0, 100)}"`);
   }
 
   const promises: Promise<SearchResult[]>[] = [];
@@ -181,18 +201,23 @@ export async function searchAliExpress(
   let failedQueries = 0;
   let timedOutQueries = 0;
 
-  for (const outcome of outcomes) {
+  for (let i = 0; i < outcomes.length; i++) {
+    const outcome = outcomes[i];
+    const queryType = i < textCount ? `text("${queries[i].slice(0, 60)}")` : "image";
     if (outcome.status === "fulfilled") {
+      console.log(`[aliexpress] ${queryType}: ${outcome.value.length} results`);
       results.push(...outcome.value);
       successfulQueries++;
     } else {
-      console.error("[aliexpress] Query failed:", outcome.reason);
+      console.error(`[aliexpress] ${queryType} failed:`, outcome.reason);
       failedQueries++;
       if (isLikelyTimeoutError(outcome.reason)) {
         timedOutQueries++;
       }
     }
   }
+
+  console.log(`[aliexpress] Total: ${results.length} results (${successfulQueries} succeeded, ${failedQueries} failed)`);
 
   return {
     results,
@@ -206,7 +231,7 @@ export async function searchAliExpress(
 
 // ── Response Normalization ───────────────────────────────────────────────────
 
-let aliIdCounter = 0;
+// No module-level counter — use randomUUID per result for unique IDs
 
 function prependHttps(url: string): string {
   if (url.startsWith("//")) return `https:${url}`;
@@ -229,7 +254,7 @@ export function normalizeTextSearchResults(data: unknown): SearchResult[] {
       : null;
 
     return {
-      id: `ali_${aliIdCounter++}`,
+      id: `ali_${randomUUID().slice(0, 8)}`,
       source: "aliexpress" as const,
       title: String(item.title ?? ""),
       price: price !== null && !isNaN(price) ? price : null,
@@ -266,7 +291,7 @@ export function normalizeImageSearchResults(data: unknown): SearchResult[] {
       : null;
 
     return {
-      id: `ali_img_${aliIdCounter++}`,
+      id: `ali_img_${randomUUID().slice(0, 8)}`,
       source: "aliexpress" as const,
       title: String(item.product_title ?? ""),
       price: price !== null && !isNaN(price) ? price : null,

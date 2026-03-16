@@ -7,6 +7,7 @@ import { createNodeWebSocket } from "@hono/node-ws";
 import { searchRoute } from "./routes/search.js";
 import { chatRoute } from "./routes/chat.js";
 import identifyRoute from "./routes/identify.js";
+import { aliexpressAuthRoute } from "./routes/aliexpress-auth.js";
 import { liveWebSocket } from "./ws/live.js";
 
 // Fail fast if required env vars are missing
@@ -35,6 +36,7 @@ app.use("/health", corsMiddleware);
 app.use("/search/*", corsMiddleware);
 app.use("/identify/*", corsMiddleware);
 app.use("/chat/*", corsMiddleware);
+app.use("/auth/*", corsMiddleware);
 
 // Health check
 app.get("/health", (c) => c.json({ status: "ok" }));
@@ -43,6 +45,7 @@ app.get("/health", (c) => c.json({ status: "ok" }));
 app.route("/search", searchRoute);
 app.route("/identify", identifyRoute);
 app.route("/chat", chatRoute);
+app.route("/auth/aliexpress", aliexpressAuthRoute);
 
 // WebSocket for Live API proxy
 app.get("/live", upgradeWebSocket(liveWebSocket));
