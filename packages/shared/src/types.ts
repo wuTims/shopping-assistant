@@ -205,6 +205,7 @@ export interface ProductDisplayInfo {
   price: number | null;
   currency: string | null;
   imageUrl?: string;
+  productUrl?: string;
   /** Base64 data URL for UI display only — never sent to backend as imageUrl */
   displayImageDataUrl?: string;
   marketplace?: string;

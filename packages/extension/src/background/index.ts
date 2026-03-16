@@ -64,7 +64,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const effectiveTabId = message.tabId ?? sender.tab?.id;
     if (!effectiveTabId) return false;
     activeTabId = effectiveTabId;
-    const displayProduct = identifiedToDisplay(product);
+    const displayProduct = {
+      ...identifiedToDisplay(product),
+      productUrl: pageUrl,
+    };
     notifySidePanel(effectiveTabId, { type: "searching", product: displayProduct });
     searchForProduct(effectiveTabId, displayProduct, screenshotDataUrl, pageUrl).then(() =>
       sendResponse({ status: "ok" }),
@@ -95,6 +98,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         price: typeof price === "number" ? price : null,
         currency: typeof currency === "string" ? currency : null,
         imageUrl,
+        productUrl: productLink ?? pageUrl,
         // Store base64 as display image for UI
         displayImageDataUrl: imageBase64 ? `data:image/png;base64,${imageBase64}` : undefined,
       };
@@ -117,8 +121,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(request),
         });
-        if (!res.ok) throw new Error("Chat request failed");
-        const data = await res.json();
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          if (data && typeof data.reply === "string" && data.reply) {
+            if (replyTabId) {
+              notifySidePanel(replyTabId, { type: "chat_response", reply: data.reply });
+            }
+            sendResponse({ status: "ok" });
+            return;
+          }
+          throw new Error(`Chat request failed (${res.status})`);
+        }
         if (replyTabId) {
           notifySidePanel(replyTabId, { type: "chat_response", reply: data.reply });
         }
@@ -236,6 +249,7 @@ function enrichProduct(product: ProductDisplayInfo, response: SearchResponse): P
     ...product,
     name: name ?? product.name,
     imageUrl: product.imageUrl || response.originalProduct.imageUrl || undefined,
+    productUrl: product.productUrl,
   };
 }
 

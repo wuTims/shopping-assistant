@@ -1,5 +1,5 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProductDisplayInfo, RankedResult, SearchResponse } from "@shopping-assistant/shared";
 import App from "../App";
 
@@ -130,6 +130,10 @@ const response: SearchResponse = {
 };
 
 describe("chat page", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     MockWebSocket.instances = [];
@@ -142,6 +146,10 @@ describe("chat page", () => {
     Object.assign(chrome, {
       tabs: {
         create: vi.fn(),
+      },
+      runtime: {
+        ...chrome.runtime,
+        sendMessage: vi.fn(),
       },
     });
   });
@@ -213,5 +221,92 @@ describe("chat page", () => {
 
     expect(screen.getByText("Which one is the best value?")).toBeInTheDocument();
     expect(screen.getByText("Marketplace 1 looks like the best value right now.")).toBeInTheDocument();
+  });
+
+  it("defaults chat focus to the current product and lets the user switch it from the result strip", () => {
+    render(
+      <App
+        initialPath="/chat"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+        }}
+      />,
+    );
+
+    const currentProductButton = screen.getByRole("button", { name: /^focus compact leather tote$/i });
+    const resultButton = screen.getByRole("button", { name: /^focus compact leather tote variant 2$/i });
+
+    expect(currentProductButton).toHaveAttribute("aria-pressed", "true");
+    expect(resultButton).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(resultButton);
+
+    expect(currentProductButton).toHaveAttribute("aria-pressed", "false");
+    expect(resultButton).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("uses the selected focused result in the chat request context", () => {
+    render(
+      <App
+        initialPath="/chat"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^focus compact leather tote variant 2$/i }));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "Tell me about this option" } });
+    fireEvent.click(screen.getByRole("button", { name: /send message/i }));
+
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: "CHAT_REQUEST",
+      request: expect.objectContaining({
+        message: "Tell me about this option",
+        context: expect.objectContaining({
+          product: expect.objectContaining({
+            title: "Compact Leather Tote Variant 2",
+            price: 80.99,
+            currency: "USD",
+            marketplace: "Marketplace 2",
+            imageUrl: "https://example.com/result.jpg",
+          }),
+          results,
+        }),
+      }),
+    }));
+  });
+
+  it("opens the product link from the chat strip without changing focus", () => {
+    const openSpy = vi.spyOn(window, "open").mockImplementation(() => null);
+
+    render(
+      <App
+        initialPath="/chat"
+        initialState={{
+          view: "results",
+          product,
+          response,
+          chatMessages: [],
+          chatLoading: false,
+        }}
+      />,
+    );
+
+    const resultButton = screen.getByRole("button", { name: /^focus compact leather tote variant 2$/i });
+    expect(resultButton).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(screen.getByRole("button", { name: /^open compact leather tote variant 2$/i }));
+
+    expect(openSpy).toHaveBeenCalledWith("https://example.com/result-2", "_blank", "noopener");
+    expect(resultButton).toHaveAttribute("aria-pressed", "false");
   });
 });

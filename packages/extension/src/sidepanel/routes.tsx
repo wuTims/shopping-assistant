@@ -293,7 +293,8 @@ function ChatInput() {
 
 function ChatRoute() {
   const {
-    currentProduct, displayResults, chatMessages, chatLoading, sendChatMessage,
+    chatFocusOptions, selectedChatFocusId, setSelectedChatFocusId,
+    chatMessages, chatLoading, sendChatMessage,
     isVoiceRecording, voiceStatus, voiceInputTranscript, voiceOutputTranscript,
   } = useSidepanelState();
 
@@ -323,41 +324,54 @@ function ChatRoute() {
         <section className="border-b border-white/60 bg-white/55 px-4 py-4 backdrop-blur-xl">
           <div className="overflow-x-auto pb-1" data-testid="chat-results-strip">
             <div className="flex min-w-max gap-3">
-              {currentProduct && (
-                <div className="w-28 shrink-0 rounded-[24px] border border-white/70 bg-white/90 p-3 shadow-sm">
-                  <div className="mb-2 h-16 rounded-2xl bg-gradient-to-br from-stone-200 to-stone-100">
-                    {(currentProduct.imageUrl || currentProduct.displayImageDataUrl) && (
-                      <img
-                        src={currentProduct.imageUrl || currentProduct.displayImageDataUrl}
-                        alt={currentProduct.name}
-                        className="h-full w-full rounded-2xl object-cover"
-                      />
+              {chatFocusOptions.map((option) => {
+                const isSelected = option.id === selectedChatFocusId;
+
+                return (
+                  <div
+                    key={option.id}
+                    className={`relative w-28 shrink-0 rounded-[24px] border shadow-sm transition ${
+                      isSelected
+                        ? "border-primary bg-orange-50/95 ring-2 ring-primary/20"
+                        : "border-white/70 bg-white/90"
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      aria-label={`Focus ${option.label}`}
+                      aria-pressed={isSelected}
+                      onClick={() => setSelectedChatFocusId(option.id)}
+                      className="w-full rounded-[24px] p-3 pb-10 text-left"
+                    >
+                      <div className={`mb-2 h-16 rounded-2xl bg-gradient-to-br ${
+                        option.kind === "current" ? "from-stone-200 to-stone-100" : "from-orange-100 to-amber-50"
+                      }`}>
+                        {option.imageUrl && (
+                          <img
+                            src={option.imageUrl}
+                            alt={option.label}
+                            className="h-full w-full rounded-2xl object-cover"
+                          />
+                        )}
+                      </div>
+                      <p className="truncate text-xs font-medium text-text-main">
+                        {option.kind === "current" ? option.label : option.subtitle}
+                      </p>
+                      <p className="mt-1 truncate text-xs text-text-muted">{option.priceLabel}</p>
+                    </button>
+                    {option.productUrl && (
+                      <button
+                        type="button"
+                        aria-label={`Open ${option.label}`}
+                        onClick={() => openExternalUrl(option.productUrl!)}
+                        className="absolute bottom-2 right-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-white/95 text-text-main shadow-sm"
+                      >
+                        <span className="material-icons text-sm">open_in_new</span>
+                      </button>
                     )}
                   </div>
-                  <p className="truncate text-xs font-medium text-text-main">{currentProduct.name}</p>
-                  <p className="mt-1 text-xs text-text-muted">Original</p>
-                </div>
-              )}
-              {displayResults.map((ranked) => (
-                <div key={ranked.result.id} className="w-28 shrink-0 rounded-[24px] border border-white/70 bg-white/90 p-3 shadow-sm">
-                  <div className="mb-2 h-16 rounded-2xl bg-gradient-to-br from-orange-100 to-amber-50">
-                    {ranked.result.imageUrl && (
-                      <img
-                        src={ranked.result.imageUrl}
-                        alt={ranked.result.title}
-                        className="h-full w-full rounded-2xl object-cover"
-                      />
-                    )}
-                  </div>
-                  <p className="truncate text-xs font-medium text-text-main">{ranked.result.marketplace}</p>
-                  <p className="mt-1 truncate text-xs text-text-muted">
-                    {ranked.result.price === null ? "See price" : new Intl.NumberFormat(undefined, {
-                      style: "currency",
-                      currency: ranked.result.currency ?? "USD",
-                    }).format(ranked.result.price)}
-                  </p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </section>
