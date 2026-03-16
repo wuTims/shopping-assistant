@@ -9,7 +9,7 @@ import type {
 } from "@shopping-assistant/shared";
 import { CACHE_TTL_MS, CACHE_MAX_ENTRIES } from "@shopping-assistant/shared";
 
-const BACKEND_URL = "http://localhost:8080";
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080";
 
 console.log("[Shopping Assistant] Service worker started");
 

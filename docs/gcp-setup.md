@@ -17,7 +17,7 @@ export SERVICE_NAME="shopping-assistant-backend"
 export REPO_NAME="shopping-assistant"
 export SA_NAME="github-actions-deployer"
 export GITHUB_ORG="wuTims"
-export GITHUB_REPO="web-dev-playground"
+export GITHUB_REPO="shopping-assistant"
 ```
 
 ## 2. Enable Required APIs

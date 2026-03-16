@@ -1,4 +1,5 @@
 import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
+import { fileURLToPath } from "node:url";
 
 interface TokenStore {
   persistTokens(tokens: Record<string, string>): Promise<void>;
@@ -18,12 +19,35 @@ class SecretManagerStore implements TokenStore {
 
   async persistTokens(tokens: Record<string, string>): Promise<void> {
     const results = await Promise.allSettled(
-      Object.entries(tokens).map(([secretName, value]) =>
-        this.client.addSecretVersion({
-          parent: `projects/${this.projectId}/secrets/${secretName}`,
+      Object.entries(tokens).map(async ([secretName, value]) => {
+        const parent = `projects/${this.projectId}/secrets/${secretName}`;
+
+        // Get current latest version before adding the new one
+        let previousVersionName: string | null = null;
+        try {
+          const [version] = await this.client.accessSecretVersion({
+            name: `${parent}/versions/latest`,
+          });
+          previousVersionName = version.name ?? null;
+        } catch {
+          // No previous version — first write for this secret
+        }
+
+        // Add new version
+        await this.client.addSecretVersion({
+          parent,
           payload: { data: Buffer.from(value, "utf8") },
-        })
-      )
+        });
+
+        // Disable the previous version to prevent unbounded accumulation
+        if (previousVersionName) {
+          try {
+            await this.client.disableSecretVersion({ name: previousVersionName });
+          } catch (err) {
+            console.debug(`[secret-store] Failed to disable old version of ${secretName}:`, err);
+          }
+        }
+      })
     );
 
     for (const [i, result] of results.entries()) {
@@ -89,7 +113,7 @@ export function getTokenStore(): TokenStore {
       console.log("[secret-store] Using Secret Manager for token persistence");
       _store = new SecretManagerStore(projectId);
     } else {
-      const path = new URL("../../.env", import.meta.url).pathname;
+      const path = fileURLToPath(new URL("../../.env", import.meta.url));
       console.log("[secret-store] Using .env file for token persistence");
       _store = new EnvFileStore(path);
     }

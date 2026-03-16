@@ -185,8 +185,12 @@ async function exchangeCodeForToken(code: string) {
     refreshTokenExpiry = refreshExpiryMs;
   }
 
-  // Persist all tokens so they survive restarts
-  await persistAllTokens(accessTokenValue, tokenExpiryMs, refreshTokenValue, refreshExpiryMs);
+  // Persist all tokens so they survive restarts (best-effort — token is in memory either way)
+  try {
+    await persistAllTokens(accessTokenValue, tokenExpiryMs, refreshTokenValue, refreshExpiryMs);
+  } catch (err) {
+    console.error("[aliexpress] Token acquired but persistence failed — won't survive restart:", err);
+  }
 
   // Schedule the next auto-refresh
   scheduleTokenRefresh(tokenExpiryMs);
@@ -252,8 +256,12 @@ async function refreshAccessToken() {
     refreshTokenExpiry = refreshExpiryMs;
   }
 
-  // Persist all tokens so they survive restarts
-  await persistAllTokens(accessTokenValue, tokenExpiryMs, newRefreshToken, refreshExpiryMs);
+  // Persist all tokens so they survive restarts (best-effort — token is in memory either way)
+  try {
+    await persistAllTokens(accessTokenValue, tokenExpiryMs, newRefreshToken, refreshExpiryMs);
+  } catch (err) {
+    console.error("[aliexpress] Token refreshed but persistence failed — won't survive restart:", err);
+  }
 
   // Schedule the next auto-refresh
   scheduleTokenRefresh(tokenExpiryMs);
@@ -336,8 +344,12 @@ export async function initAliExpressAutoRefresh(): Promise<void> {
           if (value) {
             process.env[name] = value;
           }
-        } catch {
-          // Secret may not exist yet. Skip.
+        } catch (err: unknown) {
+          // Missing secrets are expected on first deploy — only log unexpected errors
+          const code = (err as { code?: number })?.code;
+          if (code !== 5 /* NOT_FOUND */) {
+            console.debug(`[aliexpress] Failed to read secret ${name}:`, err);
+          }
         }
       }
       console.log("[aliexpress] Loaded latest token values from Secret Manager");
@@ -384,11 +396,7 @@ export async function initAliExpressAutoRefresh(): Promise<void> {
 // ── Token Persistence ────────────────────────────────────────────────────────
 
 async function persistToken(token: string): Promise<void> {
-  try {
-    await getTokenStore().persistTokens({ ALIEXPRESS_ACCESS_TOKEN: token });
-  } catch (err) {
-    console.warn("[aliexpress] Failed to persist access token:", err);
-  }
+  await getTokenStore().persistTokens({ ALIEXPRESS_ACCESS_TOKEN: token });
 }
 
 async function persistAllTokens(
@@ -407,9 +415,5 @@ async function persistAllTokens(
     tokens.ALIEXPRESS_REFRESH_TOKEN_EXPIRY = String(refreshExpiryMs);
   }
 
-  try {
-    await getTokenStore().persistTokens(tokens);
-  } catch (err) {
-    console.warn("[aliexpress] Failed to persist tokens:", err);
-  }
+  await getTokenStore().persistTokens(tokens);
 }

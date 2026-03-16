@@ -4,13 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      # All paths prefixed with shopping-assistant/ — this is a subdirectory of the repo
-      - 'shopping-assistant/packages/backend/**'
-      - 'shopping-assistant/packages/shared/**'
-      - 'shopping-assistant/pnpm-lock.yaml'
-      - 'shopping-assistant/tsconfig.base.json'
-      - 'shopping-assistant/.dockerignore'
-      - 'shopping-assistant/package.json'
+      - 'packages/backend/**'
+      - 'packages/shared/**'
+      - 'pnpm-lock.yaml'
+      - 'tsconfig.base.json'
+      - '.dockerignore'
+      - 'package.json'
   workflow_dispatch: # Allow manual trigger
 
 # Prevent concurrent deploys — newer push cancels in-progress deploy
@@ -24,11 +23,6 @@ env:
   SERVICE_NAME: shopping-assistant-backend
   REPOSITORY: shopping-assistant
   IMAGE_NAME: backend
-
-# All run commands execute from the shopping-assistant subdirectory
-defaults:
-  run:
-    working-directory: shopping-assistant
 
 jobs:
   # Job 1: Typecheck and test before deploying
@@ -46,7 +40,7 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
-          cache-dependency-path: shopping-assistant/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -114,6 +108,7 @@ jobs:
             --memory=512Mi
             --cpu=1
             --allow-unauthenticated
+            --tag=canary
             --no-traffic
           secrets: |
             GEMINI_API_KEY=GEMINI_API_KEY:latest
@@ -131,26 +126,24 @@ jobs:
 
       - name: Verify new revision before routing traffic
         run: |
-          # Get the revision URL (not the service URL — the revision is not serving yet)
-          REVISION_URL=$(gcloud run revisions list \
-            --service=${{ env.SERVICE_NAME }} \
+          # Get the canary-tagged URL — this points directly to the NEW revision
+          CANARY_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
             --region=${{ env.REGION }} \
-            --sort-by=~CREATED \
-            --format='value(status.url)' \
-            --limit=1)
-          echo "Revision URL: ${REVISION_URL}"
+            --format=json \
+            | jq -r '.status.traffic[] | select(.tag=="canary") | .url')
 
-          # If revision URL isn't available, fall back to service URL with tag
-          if [ -z "$REVISION_URL" ]; then
-            REVISION_URL="${{ steps.deploy.outputs.url }}"
+          if [ -z "$CANARY_URL" ]; then
+            echo "ERROR: Could not find canary tag URL — cannot verify new revision"
+            exit 1
           fi
+          echo "Canary URL: ${CANARY_URL}"
 
           # Health check with retry (new revision may take a moment to start)
           for i in 1 2 3 4 5; do
-            HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${REVISION_URL}/health" 2>/dev/null || echo "000")
+            HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' "${CANARY_URL}/health" 2>/dev/null || echo "000")
             if [ "$HTTP_CODE" = "200" ]; then
               echo "Health check passed!"
-              curl -s "${REVISION_URL}/health" | jq .
+              curl -s "${CANARY_URL}/health" | jq .
               exit 0
             fi
             echo "Attempt $i: got HTTP $HTTP_CODE, retrying in 5s..."
@@ -164,6 +157,10 @@ jobs:
           gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
             --to-latest \
             --region=${{ env.REGION }}
+          # Clean up the canary tag
+          gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
+            --remove-tags=canary \
+            --region=${{ env.REGION }}
           echo "Traffic routed to latest revision."
           SERVICE_URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
             --region=${{ env.REGION }} \
@@ -173,19 +170,27 @@ jobs:
       - name: Rollback on failure
         if: failure() && steps.deploy.outcome == 'success'
         run: |
-          echo "Deployment verification failed — rolling back to previous revision."
-          # Get the second-most-recent revision (the one before this deploy)
-          PREV_REVISION=$(gcloud run revisions list \
+          echo "Deployment verification failed — rolling back."
+          # Clean up the canary tag
+          gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
+            --remove-tags=canary \
+            --region=${{ env.REGION }} 2>/dev/null || true
+
+          # Route traffic to the previous revision (if one exists)
+          REVISIONS=$(gcloud run revisions list \
             --service=${{ env.SERVICE_NAME }} \
             --region=${{ env.REGION }} \
             --sort-by=~CREATED \
             --format='value(REVISION)' \
-            --limit=2 | tail -1)
-          if [ -n "$PREV_REVISION" ]; then
+            --limit=2)
+          REVISION_COUNT=$(echo "$REVISIONS" | wc -l)
+
+          if [ "$REVISION_COUNT" -ge 2 ]; then
+            PREV_REVISION=$(echo "$REVISIONS" | sed -n '2p')
             gcloud run services update-traffic ${{ env.SERVICE_NAME }} \
               --to-revisions=${PREV_REVISION}=100 \
               --region=${{ env.REGION }}
             echo "Rolled back to revision: ${PREV_REVISION}"
           else
-            echo "No previous revision found — this may be the first deploy."
+            echo "No previous revision to roll back to — this may be the first deploy."
           fi

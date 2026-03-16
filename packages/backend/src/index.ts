@@ -28,9 +28,9 @@ app.use("*", logger());
 
 // Apply CORS only to REST endpoints.
 // WebSocket upgrade requests are incompatible with CORS header mutation.
-const ALLOWED_ORIGINS = process.env.CORS_ALLOWED_ORIGINS
+const ALLOWED_ORIGINS: string | string[] = process.env.CORS_ALLOWED_ORIGINS
   ? process.env.CORS_ALLOWED_ORIGINS.split(",")
-  : ["*"];
+  : "*";
 
 const corsMiddleware = cors({
   origin: ALLOWED_ORIGINS,
