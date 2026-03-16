@@ -117,6 +117,11 @@ describe("chat page", () => {
     expect(screen.getByTestId("chat-results-strip")).toHaveClass("overflow-x-auto");
     expect(screen.getByText("Marketplace 4")).toBeInTheDocument();
     expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    const voiceButton = screen.getByRole("button", { name: /voice chat/i });
+    const sendButton = screen.getByRole("button", { name: /send message/i });
+    expect(voiceButton).toBeInTheDocument();
+    expect(sendButton).toBeInTheDocument();
+    expect(voiceButton.compareDocumentPosition(sendButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "How do these compare?" } });
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter", code: "Enter" });

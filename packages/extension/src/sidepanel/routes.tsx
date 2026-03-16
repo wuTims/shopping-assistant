@@ -213,6 +213,15 @@ function ChatInput() {
         />
         <button
           type="button"
+          aria-label="Voice chat"
+          onClick={() => {}}
+          className="inline-flex h-11 w-11 items-center justify-center rounded-full bg-white text-text-main shadow-sm"
+        >
+          <span className="material-icons text-lg">mic</span>
+        </button>
+        <button
+          type="button"
+          aria-label="Send message"
           disabled={chatLoading}
           onClick={() => {
             sendChatMessage(input);
