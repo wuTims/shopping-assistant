@@ -19,7 +19,7 @@ export function ChatThread({ messages, onSendMessage, isLoading, showComposer = 
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages]);
+  }, [messages, voiceInputTranscript, voiceOutputTranscript]);
 
   const handleSubmit = () => {
     const text = input.trim();

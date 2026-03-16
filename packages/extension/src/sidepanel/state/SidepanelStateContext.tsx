@@ -122,6 +122,9 @@ const themes: ThemeOption[] = [
 const defaultTheme = themes[0];
 const SidepanelStateContext = createContext<SidepanelStateValue | null>(null);
 
+// Keep in sync with packages/extension/src/background/index.ts:12
+const BACKEND_WS_URL = "http://localhost:8080".replace(/^http/, "ws");
+
 function toPriceLabel(price: number | null, currency: string | null) {
   if (price === null) return "See price";
   return new Intl.NumberFormat(undefined, {
@@ -447,9 +450,6 @@ export function SidepanelStateProvider({
       : null;
   const currentResponse = viewState.view === "results" ? viewState.response : null;
 
-  const BACKEND_URL = "http://localhost:8080";
-  const backendWsUrl = BACKEND_URL.replace(/^http/, "ws");
-
   const voiceContext = useMemo(() => ({
     product: currentProduct,
     results: displayResults.slice(0, 5).map((r) => ({
@@ -459,7 +459,7 @@ export function SidepanelStateProvider({
     })),
   }), [currentProduct, displayResults]);
 
-  const voice = useVoice({ backendUrl: backendWsUrl, context: voiceContext });
+  const voice = useVoice({ backendUrl: BACKEND_WS_URL, context: voiceContext });
 
   const value = useMemo<SidepanelStateValue>(() => ({
     viewState,

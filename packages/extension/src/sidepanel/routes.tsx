@@ -260,8 +260,7 @@ function ChatInput() {
 function ChatRoute() {
   const {
     currentProduct, displayResults, chatMessages, chatLoading, sendChatMessage,
-    voiceStatus, isVoiceRecording, voiceInputTranscript, voiceOutputTranscript,
-    startVoice, pauseVoice, endVoiceSession,
+    isVoiceRecording, voiceInputTranscript, voiceOutputTranscript,
   } = useSidepanelState();
 
   return (
