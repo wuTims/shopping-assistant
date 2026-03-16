@@ -22,5 +22,11 @@
   "action": {
     "default_title": "Personal Shopper"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["src/sidepanel/audio-worklet-processor.js"],
+      "matches": []
+    }
+  ],
   "icons": {}
 }
