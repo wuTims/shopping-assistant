@@ -16,12 +16,14 @@ import { searchProducts, searchImages } from "../services/brave.js";
 import { searchAliExpress } from "../services/aliexpress.js";
 import { fillMissingPrices } from "../services/price-fallback.js";
 import { generateMarketplaceQueries } from "../utils/marketplace-queries.js";
+import { extractMarketplace } from "../utils/marketplace.js";
 import type { ProviderSearchOutcome, ProviderStatus } from "../services/provider-outcome.js";
 import {
   mergeAndDedup,
   applyRanking,
   buildFallbackScores,
   heuristicPreSort,
+  diversityCap,
 } from "../services/ranking.js";
 import { computeVisualSimilarityScores, blendScores } from "../services/embedding.js";
 
@@ -48,14 +50,17 @@ searchRoute.post("/", async (c) => {
     return c.json({ error: "bad_request", message: "sourceUrl is required and must be a string" }, 400);
   }
 
+  const sourceMarketplace = extractMarketplace(body.sourceUrl);
+
   const requestId = crypto.randomUUID();
   const searchStart = Date.now();
   const remaining = () => SEARCH_TIMEOUT_MS - (Date.now() - searchStart);
 
   console.log(`[search:${requestId}] Request for: ${body.title ?? body.imageUrl ?? "(base64 image)"}`);
   console.log(`[search:${requestId}] Source URL: ${body.sourceUrl}`);
+  console.log(`[search:${requestId}] Source marketplace: ${sourceMarketplace}`);
   console.log(`[search:${requestId}] Has image: base64=${!!body.imageBase64}, url=${!!body.imageUrl}`);
-  if (body.price != null) console.log(`[search:${requestId}] Original price: ${body.currency ?? ""}${body.price}`);
+  console.log(`[search:${requestId}] Original price: ${body.price != null ? `${body.currency ?? "USD"}${body.price}` : "not provided"}`);
 
   // Hard request-level timeout — safety net to prevent unbounded latency
   const abortController = new AbortController();
@@ -136,9 +141,14 @@ searchRoute.post("/", async (c) => {
   // Grounding fields kept in response for backward compatibility.
 
   const aiQueries = identification.searchQueries;
-  const marketplaceQueries = generateMarketplaceQueries(
-    identification.description || body.title || "",
-  );
+  // Use a concise product name for marketplace queries — the full Gemini
+  // description is too verbose (200+ chars) and produces poor results when
+  // appended with site:domain operators. AI queries are search-optimized.
+  const marketplaceName = (aiQueries[0] || identification.description || body.title || "")
+    .replace(/^(buy|shop|purchase|find|get|search\s+for)\s+/i, "")
+    .trim()
+    .slice(0, 80);
+  const marketplaceQueries = generateMarketplaceQueries(marketplaceName);
   const phase2Deadline = Math.max(remaining() - 4000, 3000);
 
   const skipAiBrave = !hasNewQueries(aiQueries, titleQueries);
@@ -151,7 +161,13 @@ searchRoute.post("/", async (c) => {
   const aliExpressImage: FetchedImage | null = body.imageBase64
     ? { data: body.imageBase64, mimeType: "image/png" }
     : originalImage;
-  const aliExpressQueries = [identification.description || body.title || ""].filter(Boolean);
+  // Use concise AI-generated keywords — the full description is too verbose
+  // for AliExpress's text search API and returns irrelevant results.
+  const aliExpressQueries = aiQueries.length > 0
+    ? aiQueries.slice(0, 2).map((q) =>
+        q.replace(/^(buy|shop|purchase|find|get|search\s+for)\s+/i, "").trim(),
+      )
+    : [identification.category || body.title || ""].filter(Boolean);
   console.log(`[search:${requestId}] AliExpress queries: ${JSON.stringify(aliExpressQueries)}, hasImage: ${!!aliExpressImage}`);
 
   // Image search queries — use concise AI queries for best image results
@@ -222,15 +238,34 @@ searchRoute.post("/", async (c) => {
     return c.json({ error: "timeout", message: "Search request timed out", requestId }, 504);
   }
 
-  // ── Phase 3: merge → dedup → heuristicPreSort → cap ────────────────────
+  // ── Phase 3: merge → dedup → filter source URL → heuristicPreSort → cap ──
 
   const allResults = [...braveOutcome.results, ...aliExpressOutcome.results];
   const deduped = mergeAndDedup(allResults);
-  const preSorted = heuristicPreSort(deduped, identification, body.price);
-  const capped = preSorted.slice(0, MAX_RESULTS_FOR_RANKING);
+
+  // Filter out the exact source product URL — users don't want to see the item they're already viewing.
+  // Intentionally strips ALL query params (not just tracking params like normalizeUrl does) for
+  // aggressive matching — false positives are acceptable since users never want their own product.
+  const sourceNormalized = body.sourceUrl.split("?")[0].toLowerCase().replace(/\/$/, "");
+  const filtered = deduped.filter((r) => {
+    const normalized = r.productUrl.split("?")[0].toLowerCase().replace(/\/$/, "");
+    return normalized !== sourceNormalized;
+  });
+
+  const preSorted = heuristicPreSort(filtered, identification, body.price, sourceMarketplace);
+  const capped = diversityCap(preSorted, MAX_RESULTS_FOR_RANKING, sourceMarketplace);
 
   // ── Source attribution logging ──────────────────────────────────────────
   console.log(`[search:${requestId}] Source breakdown: Brave(title)=${titleBraveOutcome.results.length}, Brave(AI)=${aiBraveOutcome.results.length}, Brave(marketplace)=${marketplaceBraveOutcome.results.length}, Brave(image)=${imageBraveOutcome.results.length}, AliExpress=${aliExpressOutcome.results.length}`);
+
+  // Marketplace breakdown for deduped and capped results
+  const mpCount = (arr: typeof deduped) => {
+    const counts: Record<string, number> = {};
+    for (const r of arr) counts[r.marketplace] = (counts[r.marketplace] ?? 0) + 1;
+    return Object.entries(counts).map(([k, v]) => `${k}=${v}`).join(", ");
+  };
+  console.log(`[search:${requestId}] Marketplace breakdown (deduped): ${mpCount(deduped)}`);
+  console.log(`[search:${requestId}] Marketplace breakdown (capped): ${mpCount(capped)}`);
 
   console.log(`[search:${requestId}] Results: ${allResults.length} raw → ${deduped.length} deduped → ${capped.length} capped`);
 
@@ -285,7 +320,7 @@ searchRoute.post("/", async (c) => {
   // ── Phase 4: ranking ─────────────────────────────────────────────────────
 
   const rankStart = Date.now();
-  const textScores = buildFallbackScores(capped, identification);
+  const textScores = buildFallbackScores(capped, identification, sourceMarketplace);
   const scores = Object.keys(visualScores).length > 0
     ? blendScores(textScores, visualScores)
     : textScores;
@@ -295,25 +330,31 @@ searchRoute.post("/", async (c) => {
   const rankingStatus: "ok" | "fallback" = "ok";
   const rankingFailureReason: string | null = null;
 
-  // Log score breakdown for top results
+  // Log score breakdown for ALL capped results
   const hasVisual = Object.keys(visualScores).length > 0;
-  console.log(`[search:${requestId}] Scoring: mode=${hasVisual ? "blended (text+visual)" : "text-only"}`);
-  for (const r of capped.slice(0, 10)) {
+  console.log(`[search:${requestId}] Scoring: mode=${hasVisual ? "blended (text+visual)" : "text-only"}, weights=text:${0.6}/visual:${0.4}`);
+  for (const r of capped) {
     const ts = textScores[r.id] ?? 0;
     const vs = visualScores[r.id];
     const final = scores[r.id] ?? 0;
     const parts = [`text=${ts.toFixed(3)}`];
     if (vs !== undefined) parts.push(`visual=${vs.toFixed(3)}`);
     parts.push(`final=${final.toFixed(3)}`);
-    console.log(`[search:${requestId}]   Score [${r.id}] "${r.title.slice(0, 60)}": ${parts.join(", ")}`);
+    const priceTag = r.price != null ? ` $${r.price}` : " no-price";
+    const imgTag = r.imageUrl ? " +img" : " -img";
+    console.log(`[search:${requestId}]   Score [${r.id}] "${r.title.slice(0, 60)}":${priceTag}${imgTag} ${parts.join(", ")}`);
   }
 
   const ranked = applyRanking(capped, scores, body.price);
 
-  // Log filtered results
-  const filtered = capped.length - ranked.length;
-  if (filtered > 0) {
-    console.log(`[search:${requestId}] Filtered ${filtered} results below MIN_CONFIDENCE_SCORE (${MIN_CONFIDENCE_SCORE})`);
+  // Log filtered/backfilled results
+  const belowThreshold = capped.filter((r) => (scores[r.id] ?? 0) < MIN_CONFIDENCE_SCORE);
+  const backfilled = ranked.filter((r) => r.confidenceScore < MIN_CONFIDENCE_SCORE);
+  if (belowThreshold.length > 0) {
+    console.log(
+      `[search:${requestId}] ${belowThreshold.length} results below MIN_CONFIDENCE_SCORE (${MIN_CONFIDENCE_SCORE})` +
+      (backfilled.length > 0 ? `, ${backfilled.length} backfilled to meet MIN_DISPLAY_RESULTS (10)` : `, all filtered`),
+    );
   }
 
   // ── Build response ────────────────────────────────────────────────────────
@@ -357,9 +398,9 @@ searchRoute.post("/", async (c) => {
     },
   };
 
-  // Log final ranked results
+  // Log ALL final ranked results
   console.log(`[search:${requestId}] Final ranked results (${ranked.length}):`);
-  for (const r of ranked.slice(0, 10)) {
+  for (const r of ranked) {
     console.log(
       `[search:${requestId}]   #${r.rank} [${r.confidence}/${(r.confidenceScore * 100).toFixed(0)}%] ` +
       `"${r.result.title.slice(0, 60)}" ${r.result.price != null ? `${r.result.currency ?? "$"}${r.result.price}` : "no price"} ` +
