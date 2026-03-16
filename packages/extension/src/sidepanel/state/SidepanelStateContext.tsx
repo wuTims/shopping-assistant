@@ -137,8 +137,7 @@ const themes: ThemeOption[] = [
 const defaultTheme = themes[0];
 const SidepanelStateContext = createContext<SidepanelStateValue | null>(null);
 
-// Keep in sync with packages/extension/src/background/index.ts:12
-const BACKEND_WS_URL = "http://localhost:8080".replace(/^http/, "ws");
+const BACKEND_WS_URL = (import.meta.env.VITE_BACKEND_URL ?? "http://localhost:8080").replace(/^http/, "ws");
 
 function toPriceLabel(price: number | null, currency: string | null) {
   if (price === null) return "See price";
