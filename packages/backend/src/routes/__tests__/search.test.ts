@@ -14,6 +14,10 @@ const computeVisualSimilarityScoresMock = vi.fn();
 vi.mock("../../services/gemini.js", () => ({
   identifyProduct: identifyProductMock,
   generateImageSearchQueries: generateImageSearchQueriesMock,
+  sanitizeImageSearchQueries: (queries: string[]) => ({
+    acceptedQueries: queries,
+    rejectedQueries: [],
+  }),
 }));
 
 vi.mock("../../services/brave.js", () => ({

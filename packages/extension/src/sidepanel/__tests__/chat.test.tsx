@@ -90,6 +90,11 @@ const response: SearchResponse = {
     searchDurationMs: 1500,
     rankingDurationMs: 200,
     rankingStatus: "ok",
+    imageQueryDiagnostics: {
+      rawQueryCount: 0,
+      acceptedQueries: [],
+      rejectedQueries: [],
+    },
     rankingFailureReason: null,
   },
 };

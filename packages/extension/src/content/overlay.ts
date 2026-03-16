@@ -306,15 +306,28 @@ function bindOverlayEvents(img: HTMLImageElement): void {
   if (listenersAttached.has(img)) return;
   listenersAttached.add(img);
 
-  img.addEventListener("mouseenter", () => showOverlay(img));
-  img.addEventListener("mouseleave", (e) => {
+  const onEnter = () => showOverlay(img);
+  const onLeave = (e: MouseEvent) => {
     const related = e.relatedTarget as Node | null;
     if (activeOverlay && related) {
       // Don't hide if mouse moved to overlay or its parent container
       if (activeOverlay.el.contains(related) || activeOverlay.el === related) return;
     }
     scheduleHide();
-  });
+  };
+
+  img.addEventListener("mouseenter", onEnter);
+  img.addEventListener("mouseleave", onLeave);
+
+  // Sites like eBay place absolute-positioned overlay divs (hover effects, click
+  // interceptors) on top of images inside <a>/<button> wrappers, blocking mouseenter
+  // on the <img> itself.  Bind on the wrapper too so the overlay still appears.
+  const wrapper = img.closest<HTMLElement>("a, button");
+  if (wrapper && !listenersAttached.has(wrapper)) {
+    listenersAttached.add(wrapper);
+    wrapper.addEventListener("mouseenter", onEnter);
+    wrapper.addEventListener("mouseleave", onLeave);
+  }
 }
 
 /**

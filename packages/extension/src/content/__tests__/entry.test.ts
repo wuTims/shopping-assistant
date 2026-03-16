@@ -17,7 +17,7 @@ describe("content entry", () => {
 
     expect(typeof mod.onExecute).toBe("function");
 
-    mod.onExecute?.({ perf: { injectTime: 0, loadTime: 0 } });
+    mod.onExecute?.();
 
     expect(initOverlays).toHaveBeenCalledTimes(1);
   });

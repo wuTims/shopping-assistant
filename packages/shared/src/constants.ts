@@ -1,8 +1,8 @@
 export const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 export const CACHE_MAX_ENTRIES = 50;
 export const CACHE_SESSION_THRESHOLD_MS = 4 * 60 * 60 * 1000; // 4 hours
-export const PRICE_FALLBACK_TIMEOUT_MS = 5_000;
-export const PRICE_NAV_TIMEOUT_MS = 2_000;
+export const PRICE_FALLBACK_TIMEOUT_MS = 8_000;
+export const PRICE_NAV_TIMEOUT_MS = 5_000;
 export const PRICE_HTTP_TIMEOUT_MS = 2_000;
 export const MAX_PRICE_FALLBACK_RESULTS = 5;
 export const IDENTIFY_TIMEOUT_MS = 30_000;
