@@ -121,16 +121,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!tabId) return false;
     activeTabId = tabId;
 
-    const { imageUrl, titleHint, pageUrl } = message;
+    const { imageUrl, imageBase64, titleHint, pageUrl, price, currency } = message;
 
     (async () => {
       await chrome.sidePanel.open({ tabId });
 
       const product: ProductDisplayInfo = {
         name: titleHint || "Product",
-        price: null,
-        currency: null,
+        price: typeof price === "number" ? price : null,
+        currency: typeof currency === "string" ? currency : null,
         imageUrl,
+        // Store base64 as display image for UI
+        displayImageDataUrl: imageBase64 ? `data:image/png;base64,${imageBase64}` : undefined,
       };
 
       notifySidePanel(tabId, { type: "searching", product });
@@ -208,17 +210,16 @@ async function searchForProduct(
   }
 
   try {
-    // Prefer cropped product image (displayImageDataUrl) over full screenshot for imageBase64
+    // Prefer cropped product image (displayImageDataUrl) over full screenshot for imageBase64.
+    // ALWAYS send base64 when available — backend server-side fetch of imageUrl often fails
+    // (CORS, CDN anti-hotlinking, data: URLs, etc.)
     const croppedBase64 = product.displayImageDataUrl?.split(",")[1];
+    const fallbackBase64 = screenshotDataUrl
+      ? (screenshotDataUrl.includes(",") ? screenshotDataUrl.split(",")[1] : screenshotDataUrl)
+      : null;
     const searchReq: SearchRequest = {
       imageUrl: imageUrl ?? product.imageUrl ?? null,
-      imageBase64: !imageUrl
-        ? (croppedBase64 ?? (screenshotDataUrl
-          ? (screenshotDataUrl.includes(",")
-            ? screenshotDataUrl.split(",")[1]
-            : screenshotDataUrl)
-          : null))
-        : null,
+      imageBase64: croppedBase64 ?? fallbackBase64 ?? null,
       title: product.name !== "Product" ? product.name : null,
       price: product.price,
       currency: product.currency,

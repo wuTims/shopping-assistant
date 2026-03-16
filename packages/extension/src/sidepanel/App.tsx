@@ -179,12 +179,12 @@ export default function App() {
     }
   };
 
-  // Filter results to those with pricing data
+  // Show all results — even those without price — ranked by confidence/similarity
   const displayResults = state.view === "results"
-    ? state.response.results.filter((r) => r.priceAvailable)
+    ? state.response.results
     : [];
-  const hiddenCount = state.view === "results"
-    ? state.response.results.length - displayResults.length
+  const noPriceCount = state.view === "results"
+    ? state.response.results.filter((r) => !r.priceAvailable).length
     : 0;
 
   return (
@@ -301,9 +301,9 @@ export default function App() {
             )}
           </section>
 
-          {hiddenCount > 0 && (
+          {noPriceCount > 0 && (
             <p className="text-xs text-text-muted text-center">
-              {hiddenCount} result{hiddenCount > 1 ? "s" : ""} hidden (no price available)
+              {noPriceCount} result{noPriceCount > 1 ? "s" : ""} shown without price
             </p>
           )}
 

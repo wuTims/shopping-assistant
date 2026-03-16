@@ -12,7 +12,7 @@ export function ResultCard({ ranked, compact }: Props) {
         style: "currency",
         currency: result.currency || "USD",
       }).format(result.price)
-    : "N/A";
+    : null;
 
   const savingsStr = ranked.savingsPercent !== null && ranked.savingsPercent > 0
     ? `${ranked.savingsPercent.toFixed(0)}% less`
@@ -50,7 +50,7 @@ export function ResultCard({ ranked, compact }: Props) {
         )}
         <span className="text-xs text-text-muted font-medium shrink-0 w-20 truncate">{result.marketplace}</span>
         <span className="text-xs text-text-main truncate flex-1">{result.title}</span>
-        <span className="text-sm font-bold text-text-main shrink-0">{priceStr}</span>
+        <span className={`text-sm font-bold shrink-0 ${priceStr ? "text-text-main" : "text-text-muted"}`}>{priceStr ?? "See price"}</span>
         {savingsStr && (
           <span className="text-xs text-accent-green font-medium shrink-0">-{ranked.savingsPercent?.toFixed(0)}%</span>
         )}
@@ -78,7 +78,7 @@ export function ResultCard({ ranked, compact }: Props) {
         </div>
       </div>
       <div className="text-right shrink-0 ml-2">
-        <p className="font-bold text-base text-text-main">{priceStr}</p>
+        <p className={`font-bold text-base ${priceStr ? "text-text-main" : "text-text-muted text-sm"}`}>{priceStr ?? "See price"}</p>
         {savingsStr && (
           <p className="text-accent-green text-xs font-medium">{savingsStr}</p>
         )}
