@@ -28,7 +28,7 @@
 | **Cloud Run Backend** | Hono + Node.js + TypeScript | Search orchestration, AI calls, voice proxy |
 | **External APIs** | Gemini, Brave, AliExpress | Product identification, search, ranking, voice |
 
-**Design principles:** stateless backend (no database), credentials server-side only, on-demand search (never prefetch), progressive UI feedback with phase-based loading.
+**Design principles:** stateless backend (no database), credentials server-side only, on-demand search (never prefetch), progressive UI feedback with phase-based loading, grounded outputs (Gemini understands products but never fabricates results — all listings come from real marketplace APIs).
 
 ---
 
@@ -402,6 +402,40 @@ Side panel mic → AudioWorklet (16kHz PCM) → WSS /live → Cloud Run
 → Audio (24kHz PCM) + transcript + turn events relayed back
 → Web Audio API playback + transcript display
 ```
+
+---
+
+## Grounding and Hallucination Avoidance
+
+The system is designed so that Gemini acts as an **understanding and reasoning layer**, never as a source of product listings or prices. Every user-facing result is grounded in real marketplace data.
+
+### Architectural Separation: AI Understanding vs. Data Retrieval
+
+| Concern | Handled By | Grounding Guarantee |
+|---------|-----------|---------------------|
+| **Product identification** | Gemini 2.5 Flash (structured JSON output) | Constrained to extracting attributes from the user's actual product image — cannot invent products |
+| **Search results** | Brave Search API + AliExpress TOP API | All listings come from real marketplace APIs with real URLs, not AI-generated |
+| **Prices** | HTTP extraction from live product pages (JSON-LD, Open Graph, Microdata) | Prices are scraped from actual structured data on merchant websites, never estimated by AI |
+| **Visual similarity** | `gemini-embedding-2-preview` cosine similarity | Deterministic vector comparison between the original product image and candidate images — no subjective AI judgment |
+| **Ranking** | Deterministic heuristic blend (60% text + 40% visual) | Scoring uses measurable signals (title overlap, brand match, price proximity, embedding distance), not LLM opinion |
+| **Chat responses** | Gemini 2.5 Flash with injected product context + top 10 results | Chat is grounded in the actual search results returned by the pipeline — the model references real products with real prices |
+| **Voice responses** | Gemini Live API with injected system instruction + search context | Voice sessions receive the same product context and ranked results, grounding conversation in real data |
+
+### Specific Anti-Hallucination Mechanisms
+
+1. **Structured output schemas** — Product identification uses JSON response schemas that constrain Gemini to specific fields (category, brand, attributes, search queries). The model cannot return free-form text that might hallucinate product details.
+
+2. **No AI-generated URLs or prices** — The pipeline never asks Gemini to produce product links or estimate prices. URLs come from Brave Search and AliExpress; prices come from structured data extraction on live web pages.
+
+3. **Confidence filtering** — Results scoring below 0.25 combined confidence (text + visual) are filtered out before display, removing low-relevance matches that might mislead users.
+
+4. **Stale link detection** — The price extraction phase detects dead or stale product links via HTTP status codes and redirect chains, preventing the display of results that no longer exist.
+
+5. **Source marketplace penalty** — Results from the same marketplace as the source product are penalized (−0.15) and capped (max 2), preventing the system from just showing the user what they already found.
+
+6. **Diversity cap** — No single source can dominate results; the deduplication and diversity capping ensure a spread across marketplaces for genuine comparison.
+
+7. **Deterministic ranking over AI ranking** — An earlier version used Gemini to rank results by relevance, but this produced inconsistent orderings. The current deterministic heuristic blend is reproducible and auditable.
 
 ---
 

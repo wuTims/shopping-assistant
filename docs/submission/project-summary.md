@@ -18,7 +18,7 @@ The backend runs a 5-phase pipeline within a 20-second budget:
 4. **Enrich** - Two parallel passes: (a) HTTP price extraction from JSON-LD/meta tags with stale link detection, and (b) visual similarity scoring via `gemini-embedding-2-preview` (256-dimensional cosine similarity).
 5. **Rank** - Blended scoring (60% text heuristics, 40% visual similarity), confidence thresholds, and backfilling to ensure at least 10 results.
 
-Each provider can fail independently without blocking the pipeline.
+Each provider can fail independently without blocking the pipeline — the system degrades gracefully rather than failing entirely. Individual search sources have 8-second timeouts, visual embedding has a 6-second budget (falls back to text-only ranking on timeout), and price extraction has a 2-second cap per URL. If any phase fails, the pipeline continues with whatever data is available.
 
 ### Text Chat
 Users ask follow-up questions about results in a chat interface. The backend sends product context and the top 10 results to Gemini 2.5 Flash, which answers with price comparisons, product advice, and marketplace-specific guidance.
@@ -127,10 +127,24 @@ See [gcp-deployment-proof.md](gcp-deployment-proof.md) for detailed evidence and
 
 ---
 
+## Grounding and Hallucination Avoidance
+
+A core design principle is that **Gemini is used for understanding and reasoning, never for generating product listings or prices**. Every user-facing result is grounded in real marketplace data:
+
+- **All product results come from real APIs** — Brave Search and AliExpress return actual marketplace listings with real URLs. Gemini never fabricates products, links, or availability.
+- **Prices are extracted from live web pages** — The enrichment phase fetches structured data (JSON-LD, Open Graph, Microdata) from actual product URLs. Prices are never AI-estimated.
+- **Product identification uses structured output** — Gemini analyzes the user's product image but is constrained to a JSON schema (category, brand, attributes, search queries), preventing free-form hallucination.
+- **Visual similarity is deterministic** — `gemini-embedding-2-preview` produces 256-dimensional vectors; ranking uses cosine similarity scores, not subjective AI judgment.
+- **Ranking is heuristic, not AI-generated** — A deterministic blend of text signals (title overlap, brand match, price proximity) and visual similarity scores produces reproducible, auditable rankings.
+- **Confidence filtering removes low-quality results** — A minimum 0.25 combined confidence threshold and stale link detection prevent irrelevant or broken results from reaching users.
+- **Chat and voice are context-grounded** — Both text chat and voice sessions receive the actual search results and product data as context, so Gemini's responses reference real products with real prices rather than generating information from parametric knowledge.
+
+---
+
 ## Findings and Learnings
 
-### Gemini Grounding removed in favor of Brave Search
-We initially used Gemini's built-in Google Search grounding tool alongside Brave Search for dual-source coverage. In testing, grounding calls timed out at a near-100% rate, making the feature unreliable within our 20-second pipeline budget. We removed it and rely on Brave Search and AliExpress API as search providers. Gemini is used for product understanding and ranking, not for search retrieval.
+### Dedicated search APIs are more reliable than Gemini's built-in search grounding
+We initially used Gemini's built-in Google Search grounding tool alongside Brave Search for dual-source coverage. In testing, the built-in grounding tool timed out at a near-100% rate, making it unreliable within our 20-second pipeline budget. We replaced it with dedicated search APIs (Brave Search and AliExpress TOP API) that return real marketplace listings with structured pricing data. This separation of concerns — Gemini for product understanding, dedicated APIs for retrieval — actually strengthens grounding: every result is a real product from a real marketplace, and Gemini's role is constrained to identification and reasoning rather than generating search results.
 
 ### Heuristic ranking outperformed AI-based ranking
 Our first approach used Gemini Flash to rank results by visual and semantic similarity. This added 3-5 seconds of latency and produced inconsistent orderings. We replaced it with a deterministic blend: 60% text-based heuristic scoring (title overlap, brand match, price proximity, category relevance) and 40% visual similarity from `gemini-embedding-2-preview`. The result is faster, more predictable, and equally effective.

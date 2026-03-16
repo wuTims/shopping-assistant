@@ -10,6 +10,7 @@ import identifyRoute from "./routes/identify.js";
 import { aliexpressAuthRoute, initAliExpressAutoRefresh } from "./routes/aliexpress-auth.js";
 import { liveWebSocket } from "./ws/live.js";
 import { rateLimit } from "./middleware/rate-limit.js";
+import { geminiModel, liveModel } from "./services/ai-client.js";
 
 // Fail fast if required env vars are missing
 const REQUIRED_ENV_VARS = ["GEMINI_API_KEY", "BRAVE_API_KEY"];
@@ -68,8 +69,8 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
 
 injectWebSocket(server);
 
-console.log("[config] GEMINI_MODEL:", process.env.GEMINI_MODEL || "gemini-2.5-flash (default)");
-console.log("[config] GEMINI_LIVE_MODEL:", process.env.GEMINI_LIVE_MODEL || "not set");
+console.log("[config] GEMINI_MODEL:", geminiModel, process.env.GEMINI_MODEL ? "" : "(default)");
+console.log("[config] GEMINI_LIVE_MODEL:", liveModel, process.env.GEMINI_LIVE_MODEL ? "" : "(default)");
 console.log("[config] CORS origins:", process.env.CORS_ALLOWED_ORIGINS || "* (open)");
 
 // Start AliExpress token auto-refresh (if tokens are configured)

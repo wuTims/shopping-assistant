@@ -1,4 +1,3 @@
-import { SecretManagerServiceClient } from "@google-cloud/secret-manager";
 import { fileURLToPath } from "node:url";
 
 interface TokenStore {
@@ -10,14 +9,23 @@ interface TokenStore {
  * Used on Cloud Run so refreshed AliExpress tokens survive instance restarts.
  */
 class SecretManagerStore implements TokenStore {
-  private client = new SecretManagerServiceClient();
+  private client: import("@google-cloud/secret-manager").SecretManagerServiceClient | null = null;
   private projectId: string;
 
   constructor(projectId: string) {
     this.projectId = projectId;
   }
 
+  private async getClient() {
+    if (!this.client) {
+      const { SecretManagerServiceClient } = await import("@google-cloud/secret-manager");
+      this.client = new SecretManagerServiceClient();
+    }
+    return this.client;
+  }
+
   async persistTokens(tokens: Record<string, string>): Promise<void> {
+    const client = await this.getClient();
     const results = await Promise.allSettled(
       Object.entries(tokens).map(async ([secretName, value]) => {
         const parent = `projects/${this.projectId}/secrets/${secretName}`;
@@ -25,7 +33,7 @@ class SecretManagerStore implements TokenStore {
         // Get current latest version before adding the new one
         let previousVersionName: string | null = null;
         try {
-          const [version] = await this.client.accessSecretVersion({
+          const [version] = await client.accessSecretVersion({
             name: `${parent}/versions/latest`,
           });
           previousVersionName = version.name ?? null;
@@ -34,7 +42,7 @@ class SecretManagerStore implements TokenStore {
         }
 
         // Add new version
-        await this.client.addSecretVersion({
+        await client.addSecretVersion({
           parent,
           payload: { data: Buffer.from(value, "utf8") },
         });
@@ -42,7 +50,7 @@ class SecretManagerStore implements TokenStore {
         // Disable the previous version to prevent unbounded accumulation
         if (previousVersionName) {
           try {
-            await this.client.disableSecretVersion({ name: previousVersionName });
+            await client.disableSecretVersion({ name: previousVersionName });
           } catch (err) {
             console.debug(`[secret-store] Failed to disable old version of ${secretName}:`, err);
           }
